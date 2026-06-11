@@ -26,6 +26,13 @@ Phase 4 preparation:
 - User confirmed `project_memory/` should remain public in the GitHub repository.
 - Next task should teach the user to add `.gitkeep` placeholder files to selected empty directories so the architecture skeleton becomes visible on GitHub.
 
+Phase 4 progress:
+
+- First `.gitkeep` batch completed and pushed.
+- Verified commit: `1940f8a chore: track project skeleton directories`
+- `config/`, `docker/`, `docs/`, `evals/`, `knowledge_base/`, `outputs/`, `prompts/`, `scripts/`, and `tests/` now contain placeholder files.
+- `src/releaseguard_agent/` and `sample_projects/` still need placeholder files or future real files to become visible on GitHub.
+
 Codex permissions for this phase:
 
 - May read all files under `E:\A_project\Agent\ReleaseGuard_Agent`.

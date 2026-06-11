@@ -37,6 +37,18 @@ Conclusion:
 - This confirms the expected Git behavior: empty directories are not tracked.
 - Next guided task should add intentional placeholder files for empty architecture directories.
 
+First placeholder batch completed:
+
+- `git status`: clean
+- latest commit: `1940f8a chore: track project skeleton directories`
+- `.gitkeep` files added under config, docker, docs, evals, knowledge_base, outputs, prompts, scripts, and tests.
+
+Remaining skeleton visibility gap:
+
+- `src/releaseguard_agent/` subdirectories are still empty.
+- `sample_projects/` subdirectories are still empty.
+- These should be handled in the next small guided step.
+
 Observed current project files:
 
 - `.env.example`

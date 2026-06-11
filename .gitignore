@@ -1,0 +1,10 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+outputs/reports/*
+outputs/history/*
+outputs/traces/*
+outputs/logs/*

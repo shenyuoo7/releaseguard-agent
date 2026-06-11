@@ -15,6 +15,22 @@ Reminder:
 
 - Git does not track empty folders. Use placeholder files only when the user intentionally wants empty folders to appear on GitHub.
 
+Placeholder file standard:
+
+- Use `.gitkeep` only to make an otherwise empty directory visible to Git.
+- `.gitkeep` should normally be empty.
+- Do not add business logic inside `.gitkeep`.
+- Do not use `.gitkeep` as documentation.
+- Later, when a directory receives real files, `.gitkeep` can be removed if it is no longer needed.
+
+After GitHub sync, verify:
+
+- `git status` says the working tree is clean.
+- `git remote -v` points to the intended repository.
+- `git log --oneline -1` matches the pushed commit.
+- The GitHub repository can display the expected files.
+- If empty folders are part of the intended public project skeleton, add explicit placeholder files in a later guided step.
+
 ## Latest Teaching And File Modification Standards
 
 - Codex may update `AGENTS.md` and Markdown memory files under `project_memory/` when memory maintenance is needed.

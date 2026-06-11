@@ -8,3 +8,7 @@ outputs/reports/*
 outputs/history/*
 outputs/traces/*
 outputs/logs/*
+!outputs/reports/.gitkeep
+!outputs/history/.gitkeep
+!outputs/traces/.gitkeep
+!outputs/logs/.gitkeep

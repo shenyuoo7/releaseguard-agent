@@ -49,6 +49,19 @@ Remaining skeleton visibility gap:
 - `sample_projects/` subdirectories are still empty.
 - These should be handled in the next small guided step.
 
+Second placeholder batch completed:
+
+- `git status`: clean
+- latest commit: `05f8019 chore: track source and sample project skeletons`
+- `.gitkeep` files added under `src/releaseguard_agent/` architecture directories.
+- `.gitkeep` files added under all planned `sample_projects/` directories.
+
+Review result:
+
+- Accepted.
+- The full planned skeleton is now trackable by Git.
+- Next phase should move from pure folder tracking to Python package initialization.
+
 Observed current project files:
 
 - `.env.example`

@@ -23,6 +23,14 @@ Placeholder file standard:
 - Do not use `.gitkeep` as documentation.
 - Later, when a directory receives real files, `.gitkeep` can be removed if it is no longer needed.
 
+Python package initialization standard:
+
+- Use `__init__.py` to mark directories that are intended to be Python packages.
+- Add `__init__.py` only under real importable source directories, not under `sample_projects/` unless those sample projects later need their own packages.
+- Keep initial `__init__.py` files empty or very small.
+- Do not put business logic inside `__init__.py`.
+- After a directory has real package files, `.gitkeep` can eventually be removed in a cleanup step.
+
 After GitHub sync, verify:
 
 - `git status` says the working tree is clean.

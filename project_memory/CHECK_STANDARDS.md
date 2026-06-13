@@ -31,6 +31,13 @@ Python package initialization standard:
 - Do not put business logic inside `__init__.py`.
 - After a directory has real package files, `.gitkeep` can eventually be removed in a cleanup step.
 
+Command execution standard:
+
+- Prefer running project commands from the project root: `E:\A_project\Agent\ReleaseGuard_Agent`.
+- When running from a subdirectory, use paths relative to that subdirectory.
+- For this project, Python commands should use a Python 3.11+ interpreter, preferably from the project-local `.venv`.
+- Before validating Python files, run `python --version` and confirm it is 3.11 or newer.
+
 After GitHub sync, verify:
 
 - `git status` says the working tree is clean.

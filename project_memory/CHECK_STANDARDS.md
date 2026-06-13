@@ -38,6 +38,12 @@ Command execution standard:
 - For this project, Python commands should use a Python 3.11+ interpreter, preferably from the project-local `.venv`.
 - Before validating Python files, run `python --version` and confirm it is 3.11 or newer.
 
+IDE file hygiene standard:
+
+- Do not commit local IDE configuration folders such as `.idea/` unless there is a deliberate team-level reason.
+- For this project, `.idea/` should be ignored by `.gitignore`.
+- If `.idea/` has already been committed, remove it from Git tracking with `git rm --cached` so local PyCharm settings remain on disk but are no longer tracked.
+
 After GitHub sync, verify:
 
 - `git status` says the working tree is clean.

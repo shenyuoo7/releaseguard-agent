@@ -1,6 +1,8 @@
 .venv/
 .idea/
 .env
+AGENTS.md
+project_memory/
 __pycache__/
 *.pyc
 .pytest_cache/

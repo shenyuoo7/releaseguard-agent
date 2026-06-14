@@ -5,6 +5,8 @@
 - Codex may update `AGENTS.md` and Markdown files under `project_memory/` when project memory needs to be maintained.
 - Codex must not modify any other project file unless the user explicitly allows that specific change.
 - Formal project files, source code, configuration files, docs, tests, sample projects, and implementation files should be created or edited by the user personally during guided learning.
+- Codex may provide complete code examples for the user to study and manually copy/type into files, but must not write the code into project files unless explicitly asked.
+- When providing complete code, Codex should explain what the code does, why it is needed, and how to verify it.
 - Codex must not modify files unless the user asks for the specific modification.
 - When the user asks for guidance, Codex should provide tasks, explanations, examples, commands, and acceptance standards, then wait for the user to execute and submit results for review.
 - The user may have no programming foundation. Codex must teach patiently and carefully, explain terminology, explain why each step matters, and avoid assuming hidden background knowledge.

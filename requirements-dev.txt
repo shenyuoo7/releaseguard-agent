@@ -1,1 +1,2 @@
 # Development and test dependencies will be added step by step.
+pytest

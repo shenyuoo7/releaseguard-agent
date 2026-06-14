@@ -131,6 +131,18 @@ Repository hygiene issue:
 - `.gitignore` currently does not ignore `.idea/`.
 - Next step should remove `.idea/` from Git tracking using `git rm --cached` and add `.idea/` to `.gitignore`.
 
+IDE file hygiene cleanup completed:
+
+- User reported latest commit: `4b254a8 chore: ignore local IDE settings`.
+- `.gitignore` now includes `.idea/`.
+- `git ls-files .idea` returned no tracked files.
+- Review result: accepted.
+
+Next review target:
+
+- Review `src/releaseguard_agent/models/check_result.py` for model clarity and future checker/report/agent compatibility.
+- Then add the first focused unit tests.
+
 Observed current project files:
 
 - `.env.example`

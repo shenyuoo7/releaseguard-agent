@@ -93,6 +93,25 @@ Immediate next task:
 
 - Add `.idea/` to `.gitignore` and remove `.idea/` from Git tracking while keeping it locally.
 
+Phase 8 completion:
+
+- User added `.idea/` to `.gitignore`.
+- User removed `.idea/` from Git tracking while keeping local PyCharm settings.
+- Verified commit: `4b254a8 chore: ignore local IDE settings`
+- `git ls-files .idea` returns no tracked files.
+- Working tree is clean and synchronized with `origin/main`.
+
+Next recommended phase:
+
+- Review the first core model design in `src/releaseguard_agent/models/check_result.py` before adding more code.
+- After model review, create focused unit tests for `CheckResult` and configure the minimal test dependency workflow.
+
+Phase 9 start:
+
+- User requested that Codex provide complete code references in future steps while still not modifying project files directly.
+- Next task: create the first focused unit tests for `CheckResult`.
+- The user should personally add test dependencies and test code, then run the tests and submit output for review.
+
 Codex permissions for this phase:
 
 - May read all files under `E:\A_project\Agent\ReleaseGuard_Agent`.

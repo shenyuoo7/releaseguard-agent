@@ -57,6 +57,8 @@ After GitHub sync, verify:
 - Codex may update `AGENTS.md` and Markdown memory files under `project_memory/` when memory maintenance is needed.
 - Codex must not modify formal project files unless the user explicitly allows the exact change.
 - Formal project files should normally be created and edited by the user personally so the user learns the project deeply.
+- Codex may provide complete code references, but the user should manually create or edit formal project files unless explicitly asking Codex to modify them.
+- Complete code references should include a short explanation and verification commands.
 - Codex must explain tasks patiently for a beginner, including what each folder or file means, why it exists, and how the user can verify the result.
 - Codex guidance must stay step-by-step and must not assume prior programming knowledge.
 - Codex must not modify files unless the user asks for the specific modification.

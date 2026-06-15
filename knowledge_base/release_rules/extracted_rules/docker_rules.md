@@ -1,29 +1,30 @@
 # Docker Rules
 
-本文件汇总第一阶段 DockerChecker 和 DockerStyleChecker 可使用的规则。
+This file groups phase-one Dockerfile release-readiness rules.
 
-## Rules
+## Rule Table
 
-| rule_id | rule_name | checker | source | priority | phase |
-|---|---|---|---|---|---|
-| RG-DOCKER-001 | 检查项目是否存在 Dockerfile | DockerChecker | Dockerfile reference | high | phase-1 |
-| RG-DOCKER-002 | 检查 Dockerfile 是否包含 FROM 指令 | DockerChecker | Dockerfile reference | high | phase-1 |
-| RG-DOCKER-003 | 检查 FROM 是否出现在合理位置 | DockerChecker | Dockerfile reference | high | phase-1 |
-| RG-DOCKER-004 | 检查 Dockerfile 是否包含 WORKDIR | DockerChecker | Dockerfile reference | medium | phase-1 |
-| RG-DOCKER-005 | 检查 Dockerfile 是否包含 COPY 或 ADD | DockerChecker | Dockerfile reference | medium | phase-1 |
-| RG-DOCKER-006 | 检查 Dockerfile 是否包含依赖安装步骤 | DockerChecker | Dockerfile reference | medium | phase-1 |
-| RG-DOCKER-007 | 检查 Dockerfile 是否包含 CMD 或 ENTRYPOINT | DockerChecker | Dockerfile reference | high | phase-1 |
-| RG-DOCKER-008 | 检查 Dockerfile 指令是否使用统一大写风格 | DockerStyleChecker | Dockerfile reference | low | phase-1 |
+| rule_id | rule_name | checker | source | support_level | blocking_policy | evidence_type | phase |
+|---|---|---|---|---|---|---|---|
+| RG-DOCKER-001 | Dockerfile exists when containerized release is expected | DockerChecker | Dockerfile reference; ReleaseGuard container policy | releaseguard-default | conditional | file_exists | phase-1 |
+| RG-DOCKER-002 | Dockerfile contains `FROM` | DockerChecker | Dockerfile reference | source-backed | block | docker_instruction | phase-1 |
+| RG-DOCKER-003 | `FROM` appears in a valid position | DockerChecker | Dockerfile reference | source-backed | block | docker_instruction_order | phase-1 |
+| RG-DOCKER-004 | Dockerfile contains `WORKDIR` | DockerChecker | Dockerfile reference; ReleaseGuard default policy | releaseguard-default | warn | docker_instruction | phase-1 |
+| RG-DOCKER-005 | Dockerfile contains `COPY` or `ADD` | DockerChecker | Dockerfile reference; ReleaseGuard default policy | releaseguard-default | warn | docker_instruction | phase-1 |
+| RG-DOCKER-006 | Dockerfile contains dependency installation steps | DockerChecker | Dockerfile reference; ReleaseGuard Python image policy | releaseguard-default | warn | docker_instruction | phase-1 |
+| RG-DOCKER-007 | Dockerfile contains `CMD` or `ENTRYPOINT` | DockerChecker | Dockerfile reference; ReleaseGuard runnable image policy | releaseguard-default | conditional | docker_instruction | phase-1 |
+| RG-DOCKER-008 | Dockerfile instruction casing follows uppercase convention | DockerStyleChecker | Dockerfile reference | source-backed | info | docker_instruction_style | phase-1 |
 
-## 第一阶段落地方式
+## Checker Guidance
 
-- 先查找根目录 `Dockerfile`。
-- 使用逐行文本解析 Dockerfile 指令。
-- 先实现存在性和基础结构检查。
-- 不在第一阶段做镜像构建和安全扫描。
+- Start with root-level `Dockerfile`.
+- Parse Dockerfile text; do not build images in phase one.
+- `RG-DOCKER-003` should allow parser directives, comments, and global `ARG` before `FROM`.
+- `RG-DOCKER-006` can start with Python-focused matches such as `pip install`, `python -m pip install`, `uv sync`, or dependency file copy/install patterns.
+- `RG-DOCKER-008` should never block release because Docker instructions are case-insensitive.
 
-## 需要人工确认
+## Boundary Notes
 
-- 缺少 Dockerfile 是否对所有项目都算 failed。
-- 是否识别 `docker/Dockerfile`。
-- Docker 指令大小写问题是否只作为 info 或 low。
+- Missing Dockerfile is conditional, not universally blocking.
+- Do not claim Docker image security scanning coverage.
+- Do not require `COPY` or `ADD` for every possible Dockerfile; report it as a warning unless context proves it is necessary.

@@ -1,28 +1,29 @@
 # FastAPI Rules
 
-本文件汇总第一阶段 FastAPIDetector、FastAPITestChecker 和 FastAPIHealthChecker 可使用的规则。
+This file groups phase-one FastAPI detection and FastAPI testing rules.
 
-## Rules
+## Rule Table
 
-| rule_id | rule_name | checker | source | priority | phase |
-|---|---|---|---|---|---|
-| RG-FASTAPI-001 | 检查项目是否声明 FastAPI 依赖 | FastAPIDetector | FastAPI Testing | high | phase-1 |
-| RG-FASTAPI-002 | 检查代码中是否存在 FastAPI app 实例 | FastAPIDetector | FastAPI Testing | high | phase-1 |
-| RG-FASTAPI-003 | 检查是否使用 FastAPI TestClient | FastAPITestChecker | FastAPI Testing | medium | phase-1 |
-| RG-FASTAPI-004 | 检查是否存在针对 FastAPI app 的测试文件 | FastAPITestChecker | FastAPI Testing | high | phase-1 |
-| RG-FASTAPI-005 | 检查 FastAPI 测试是否能被 pytest 运行 | FastAPITestChecker | FastAPI Testing | high | phase-1 |
-| RG-FASTAPI-006 | 检查 FastAPI 测试是否包含基础状态码断言 | FastAPITestChecker | FastAPI Testing | medium | phase-1 |
-| RG-FASTAPI-007 | 检查是否存在健康检查接口 | FastAPIHealthChecker | 需要补充健康检查资料依据 | medium | phase-1 |
+| rule_id | rule_name | checker | source | support_level | blocking_policy | evidence_type | phase |
+|---|---|---|---|---|---|---|---|
+| RG-FASTAPI-001 | FastAPI dependency is declared when FastAPI is used | FastAPIDetector | FastAPI Testing; ReleaseGuard dependency policy | releaseguard-default | block | dependency_line | phase-1 |
+| RG-FASTAPI-002 | FastAPI app instance is detectable | FastAPIDetector | FastAPI Testing | source-backed | block | matched_lines | phase-1 |
+| RG-FASTAPI-003 | FastAPI `TestClient` is used | FastAPITestChecker | FastAPI Testing | source-backed | warn | matched_lines | phase-1 |
+| RG-FASTAPI-004 | Tests are tied to the FastAPI app | FastAPITestChecker | FastAPI Testing | source-backed | warn | matched_lines | phase-1 |
+| RG-FASTAPI-005 | FastAPI tests can run through pytest | FastAPITestChecker | FastAPI Testing | source-backed | block | command_result | phase-1 |
+| RG-FASTAPI-006 | FastAPI tests assert response status codes | FastAPITestChecker | FastAPI Testing | source-backed | warn | matched_lines | phase-1 |
+| RG-FASTAPI-007 | Health-check route exists | FastAPIHealthChecker | ReleaseGuard default policy; stronger operations source needed | releaseguard-default | warn | route_match | phase-1 |
 
-## 第一阶段落地方式
+## Checker Guidance
 
-- 从依赖文件中识别 `fastapi`。
-- 从源码文本中识别 `FastAPI()`。
-- 从测试文件中识别 `TestClient`、`TestClient(app)` 和状态码断言。
-- 对 `/health` 类接口先做路由字符串识别，但必须在报告中标记规则依据待补充。
+- Start with explicit `FastAPI()` detection in Python files.
+- Dependency checking should compare source usage and dependency declaration files.
+- `TestClient` detection should inspect pytest-discoverable test files first.
+- `RG-FASTAPI-005` can reuse pytest execution evidence where possible.
+- Health-check route detection should match common route strings such as `/health`, `/healthz`, `/ready`, or `/live`.
 
-## 需要人工确认
+## Boundary Notes
 
-- 是否支持 FastAPI 工厂函数模式。
-- 是否把 `/health` 缺失作为 failed，还是 warning。
-- 是否要求 FastAPI 项目必须包含至少一个 TestClient 测试。
+- Do not treat `/health` as an official FastAPI requirement.
+- Factory-pattern app detection can be deferred until the explicit app-instance checker is stable.
+- Missing FastAPI dependency is blocking when FastAPI usage is detected because release environments need reproducible dependency installation.

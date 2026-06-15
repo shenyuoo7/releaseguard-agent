@@ -1,27 +1,29 @@
 # Test Rules
 
-本文件汇总第一阶段 TestChecker 和 TestConfigChecker 可直接使用的规则。
+This file groups phase-one pytest release-readiness rules.
 
-## Rules
+## Rule Table
 
-| rule_id | rule_name | checker | source | priority | phase |
-|---|---|---|---|---|---|
-| RG-TEST-001 | 检查项目是否存在 tests 目录 | TestChecker | pytest Good Integration Practices | high | phase-1 |
-| RG-TEST-002 | 检查是否存在 pytest 可发现的测试文件 | TestChecker | pytest Good Integration Practices | high | phase-1 |
-| RG-TEST-003 | 检查是否存在 pytest 可收集的测试函数或方法 | TestChecker | pytest Good Integration Practices | high | phase-1 |
-| RG-TEST-004 | 检查 pytest 是否能成功收集测试 | TestChecker | pytest Good Integration Practices | high | phase-1 |
-| RG-TEST-005 | 检查 pytest 测试是否能运行通过 | TestChecker | pytest Good Integration Practices | high | phase-1 |
-| RG-TEST-006 | 检查项目是否存在 pytest 配置 | TestConfigChecker | pytest Good Integration Practices | medium | phase-1 |
-| RG-TEST-007 | 检查 src layout 项目是否有可复现的导入配置 | TestConfigChecker | pytest Good Integration Practices | medium | phase-1 |
+| rule_id | rule_name | checker | source | support_level | blocking_policy | evidence_type | phase |
+|---|---|---|---|---|---|---|---|
+| RG-TEST-001 | Root `tests/` directory exists | TestStructureChecker | pytest Good Integration Practices; ReleaseGuard default policy | releaseguard-default | warn | directory_exists | phase-1 |
+| RG-TEST-002 | Pytest-discoverable test files exist | TestStructureChecker | pytest Good Integration Practices | source-backed | block | file_glob_matches | phase-1 |
+| RG-TEST-003 | Pytest can collect at least one test item | PytestExecutionChecker | pytest Good Integration Practices | source-backed | block | collected_tests | phase-1 |
+| RG-TEST-004 | Pytest collect-only command succeeds | PytestExecutionChecker | pytest Good Integration Practices | source-backed | block | command_result | phase-1 |
+| RG-TEST-005 | Pytest run command succeeds | PytestExecutionChecker | pytest Good Integration Practices | source-backed | block | command_result | phase-1 |
+| RG-TEST-006 | Pytest configuration exists | PytestConfigChecker | pytest Good Integration Practices; ReleaseGuard default policy | releaseguard-default | warn | file_exists | phase-1 |
+| RG-TEST-007 | `src` layout import behavior is reproducible | PytestConfigChecker | pytest Good Integration Practices | source-backed | conditional | config_value | phase-1 |
 
-## 第一阶段落地方式
+## Checker Guidance
 
-- 先做 `tests/` 目录存在性检查。
-- 再做测试文件命名规则扫描。
-- 再通过 `python -m pytest --collect-only` 获取可收集测试数量。
-- 最后执行 `python -m pytest`，把退出码和失败摘要作为 evidence。
+- `RG-TEST-001` through `RG-TEST-005` are already implemented in the first checker milestone.
+- `RG-TEST-006` can check for `pytest.ini`, `pytest.toml`, `.pytest.ini`, `pyproject.toml`, `tox.ini`, or `setup.cfg`.
+- `RG-TEST-007` should apply only when a `src/` layout is detected.
+- `RG-TEST-007` may accept `pythonpath = src`, `PYTHONPATH=src` documentation, or a future editable-install packaging workflow.
+- Use `python -m pytest` in commands and report text.
 
-## 需要人工确认
+## Boundary Notes
 
-- collected 0 items 应该是 failed 还是 warning。
-- `src` layout 的导入规则优先采用 pytest `pythonpath`，还是要求项目支持 editable install。
+- Missing `tests/` is warning-level in phase one because pytest supports multiple layouts.
+- Missing pytest-discoverable test files is blocking because the release check cannot verify behavior.
+- `collected 0 items` should be treated as blocking for ReleaseGuard, even if pytest can exit successfully in some situations.

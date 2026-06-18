@@ -13,6 +13,10 @@ from releaseguard_agent.models.check_result import (
     CheckStatus,
     RiskLevel,
 )
+from releaseguard_agent.reports.report_writer import (
+    build_report_payload,
+    write_report_artifacts,
+)
 
 EXIT_SUCCESS = 0
 EXIT_BLOCKING_ISSUES = 1
@@ -48,6 +52,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="text",
         help="Output format. Defaults to text.",
     )
+    check_parser.add_argument(
+        "--output-dir",
+        default=None,
+        help=(
+            "Write release_report.md and check_result.json "
+            "to this directory."
+        ),
+    )
     check_parser.set_defaults(handler=run_check_command)
 
     list_parser = subparsers.add_parser(
@@ -82,13 +94,28 @@ def run_check_command(args: argparse.Namespace) -> int:
     results = runner.run(project_path)
     summary = build_result_summary(results)
 
+    payload = build_report_payload(
+        project_path=project_path,
+        include_pytest_execution=include_pytest_execution,
+        results=results,
+        summary=summary,
+    )
+
+    if args.output_dir is not None:
+        output_dir = Path(args.output_dir).expanduser().resolve()
+
+        try:
+            write_report_artifacts(
+                output_dir=output_dir,
+                payload=payload,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            _print_error(
+                f"Could not write report artifacts to {output_dir}: {exc}"
+            )
+            return EXIT_USAGE_ERROR
+
     if args.output_format == "json":
-        payload = build_json_payload(
-            project_path=project_path,
-            include_pytest_execution=include_pytest_execution,
-            results=results,
-            summary=summary,
-        )
         print(json.dumps(payload, indent=2))
     else:
         print(
@@ -138,22 +165,6 @@ def build_result_summary(results: list[CheckResult]) -> dict[str, object]:
         "blocking": blocking_count,
         "status_counts": status_counts,
         "risk_counts": risk_counts,
-    }
-
-
-def build_json_payload(
-    *,
-    project_path: Path,
-    include_pytest_execution: bool,
-    results: list[CheckResult],
-    summary: dict[str, object],
-) -> dict[str, object]:
-    return {
-        "tool": "releaseguard-agent",
-        "project_path": str(project_path),
-        "include_pytest_execution": include_pytest_execution,
-        "summary": summary,
-        "results": [result.to_dict() for result in results],
     }
 
 
@@ -217,7 +228,10 @@ def _enabled_label(enabled: bool) -> str:
     return "disabled"
 
 
-def _print_error(message: str, stream: TextIO | None = None) -> None:
+def _print_error(
+    message: str,
+    stream: TextIO | None = None,
+) -> None:
     if stream is None:
         stream = sys.stderr
 

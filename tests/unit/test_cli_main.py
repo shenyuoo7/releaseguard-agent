@@ -13,10 +13,14 @@ def create_release_ready_project(project_path):
     requirements_file.write_text("pytest\n", encoding="utf-8")
 
     env_example_file = project_path / ".env.example"
-    env_example_file.write_text("APP_ENV=local\n", encoding="utf-8")
+    env_example_file.write_text(
+        "APP_ENV=local\n",
+        encoding="utf-8",
+    )
 
     tests_dir = project_path / "tests"
     tests_dir.mkdir()
+
     test_file = tests_dir / "test_sample.py"
     test_file.write_text(
         "def test_sample():\n"
@@ -32,7 +36,10 @@ def create_release_ready_project(project_path):
     )
 
 
-def test_check_command_runs_default_non_dynamic_checks(tmp_path, capsys):
+def test_check_command_runs_default_non_dynamic_checks(
+    tmp_path,
+    capsys,
+):
     create_release_ready_project(tmp_path)
 
     exit_code = main(
@@ -88,6 +95,83 @@ def test_check_command_outputs_json(tmp_path, capsys):
     assert len(payload["results"]) >= 1
 
 
+def test_check_command_writes_report_artifacts(
+    tmp_path,
+    capsys,
+):
+    create_release_ready_project(tmp_path)
+    output_dir = tmp_path / "generated-reports"
+
+    exit_code = main(
+        [
+            "check",
+            str(tmp_path),
+            "--skip-pytest-execution",
+            "--format",
+            "json",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    terminal_payload = json.loads(captured.out)
+
+    markdown_path = output_dir / "release_report.md"
+    json_path = output_dir / "check_result.json"
+
+    assert exit_code == EXIT_SUCCESS
+    assert captured.err == ""
+
+    assert markdown_path.is_file()
+    assert json_path.is_file()
+
+    markdown = markdown_path.read_text(encoding="utf-8")
+    file_payload = json.loads(
+        json_path.read_text(encoding="utf-8")
+    )
+
+    assert "# ReleaseGuard Report" in markdown
+    assert "## Summary" in markdown
+    assert "RG-DEPS-001" in markdown
+
+    assert file_payload["tool"] == "releaseguard-agent"
+    assert file_payload["project_path"] == str(tmp_path.resolve())
+    assert file_payload["summary"]["blocking"] == 0
+
+    assert terminal_payload == file_payload
+
+
+def test_check_command_returns_usage_error_when_output_path_is_file(
+    tmp_path,
+    capsys,
+):
+    create_release_ready_project(tmp_path)
+
+    output_path = tmp_path / "report-target"
+    output_path.write_text(
+        "This is a file, not a directory.\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "check",
+            str(tmp_path),
+            "--skip-pytest-execution",
+            "--output-dir",
+            str(output_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == EXIT_USAGE_ERROR
+    assert captured.out == ""
+    assert "Could not write report artifacts" in captured.err
+    assert str(output_path.resolve()) in captured.err
+
+
 def test_check_command_uses_current_directory_when_path_is_omitted(
     tmp_path,
     monkeypatch,
@@ -135,7 +219,9 @@ def test_list_checkers_outputs_default_checker_names(capsys):
 
 
 def test_list_checkers_can_skip_pytest_execution_checker(capsys):
-    exit_code = main(["list-checkers", "--skip-pytest-execution"])
+    exit_code = main(
+        ["list-checkers", "--skip-pytest-execution"]
+    )
 
     captured = capsys.readouterr()
 

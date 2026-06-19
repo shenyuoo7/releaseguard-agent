@@ -15,6 +15,7 @@ from releaseguard_agent.core.default_checkers import (
     get_default_python_checker_names,
     get_default_python_checkers,
 )
+from releaseguard_agent.detectors.fastapi_detector import FastAPIDetector
 
 
 def test_default_python_checkers_are_in_expected_order():
@@ -25,6 +26,7 @@ def test_default_python_checkers_are_in_expected_order():
         EnvExampleChecker,
         TestStructureChecker,
         PytestConfigChecker,
+        FastAPIDetector,
         PytestExecutionChecker,
     ]
 
@@ -33,6 +35,7 @@ def test_default_python_checkers_are_in_expected_order():
         "env_example_checker",
         "test_structure_checker",
         "pytest_config_checker",
+        "fastapi_detector",
         "pytest_execution_checker",
     ]
 
@@ -45,6 +48,7 @@ def test_default_python_checkers_can_exclude_pytest_execution():
         EnvExampleChecker,
         TestStructureChecker,
         PytestConfigChecker,
+        FastAPIDetector,
     ]
 
     assert "pytest_execution_checker" not in [
@@ -60,6 +64,7 @@ def test_default_python_checker_names_match_default_checker_order():
         "env_example_checker",
         "test_structure_checker",
         "pytest_config_checker",
+        "fastapi_detector",
         "pytest_execution_checker",
     )
 
@@ -84,6 +89,7 @@ def test_build_default_python_runner_returns_checker_runner():
         "env_example_checker",
         "test_structure_checker",
         "pytest_config_checker",
+        "fastapi_detector",
     ]
 
 
@@ -100,6 +106,8 @@ def test_default_python_runner_can_run_non_dynamic_checks(tmp_path):
     assert "RG-TEST-002" in rule_ids
     assert "RG-TEST-006" in rule_ids
     assert "RG-TEST-007" in rule_ids
+    assert "RG-FASTAPI-001" in rule_ids
+    assert "RG-FASTAPI-002" in rule_ids
 
     assert "RG-TEST-003" not in rule_ids
     assert "RG-TEST-004" not in rule_ids

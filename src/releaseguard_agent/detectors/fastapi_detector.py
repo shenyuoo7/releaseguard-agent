@@ -384,7 +384,7 @@ class FastAPIDetector(BaseChecker):
         relative_path = self._relative_path(python_file, project_path)
 
         try:
-            source = python_file.read_text(encoding="utf-8")
+            source = python_file.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError) as error:
             return [], [], f"{relative_path}: {type(error).__name__}: {error}"
 
@@ -605,7 +605,7 @@ class FastAPIDetector(BaseChecker):
         project_path: Path,
     ) -> list[DependencyMatch]:
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = path.read_text(encoding="utf-8-sig").splitlines()
         except (OSError, UnicodeDecodeError):
             return []
 
@@ -631,7 +631,7 @@ class FastAPIDetector(BaseChecker):
         project_path: Path,
     ) -> list[DependencyMatch]:
         try:
-            source = path.read_text(encoding="utf-8")
+            source = path.read_text(encoding="utf-8-sig")
             data = tomllib.loads(source)
         except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
             return []
@@ -699,8 +699,8 @@ class FastAPIDetector(BaseChecker):
         parser = configparser.ConfigParser(interpolation=None)
 
         try:
-            parser.read(path, encoding="utf-8")
-            source = path.read_text(encoding="utf-8")
+            parser.read(path, encoding="utf-8-sig")
+            source = path.read_text(encoding="utf-8-sig")
         except (configparser.Error, OSError, UnicodeDecodeError):
             return []
 
@@ -725,7 +725,7 @@ class FastAPIDetector(BaseChecker):
         project_path: Path,
     ) -> list[DependencyMatch]:
         try:
-            source = path.read_text(encoding="utf-8")
+            source = path.read_text(encoding="utf-8-sig")
             tree = ast.parse(source, filename=str(path))
         except (OSError, UnicodeDecodeError, SyntaxError):
             return []

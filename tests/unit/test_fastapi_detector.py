@@ -15,19 +15,29 @@ def get_result(results, rule_id):
     raise AssertionError(f"Missing result for rule: {rule_id}")
 
 
-def create_source_file(project_path, content):
+def create_source_file(
+    project_path,
+    content,
+    *,
+    encoding="utf-8",
+):
     source_dir = project_path / "src"
     source_dir.mkdir(exist_ok=True)
 
     source_file = source_dir / "main.py"
-    source_file.write_text(content, encoding="utf-8")
+    source_file.write_text(content, encoding=encoding)
 
     return source_file
 
 
-def create_requirements(project_path, content="fastapi==0.115.0\n"):
+def create_requirements(
+    project_path,
+    content="fastapi==0.115.0\n",
+    *,
+    encoding="utf-8",
+):
     requirements = project_path / "requirements.txt"
-    requirements.write_text(content, encoding="utf-8")
+    requirements.write_text(content, encoding=encoding)
     return requirements
 
 
@@ -74,6 +84,27 @@ def test_fastapi_detector_passes_direct_import_and_app(tmp_path):
     assert app_result.metadata["app_instance_detected"] is True
     assert app_result.metadata["app_matches"][0]["target_name"] == "app"
     assert app_result.metadata["app_matches"][0]["line_number"] == 3
+
+
+def test_fastapi_detector_supports_utf8_bom_files(tmp_path):
+    create_requirements(tmp_path, encoding="utf-8-sig")
+    create_source_file(
+        tmp_path,
+        "from fastapi import FastAPI\n"
+        "\n"
+        "app = FastAPI()\n",
+        encoding="utf-8-sig",
+    )
+
+    results = FastAPIDetector().run(tmp_path)
+
+    dependency_result = get_result(results, "RG-FASTAPI-001")
+    app_result = get_result(results, "RG-FASTAPI-002")
+
+    assert dependency_result.status == CheckStatus.PASSED
+    assert app_result.status == CheckStatus.PASSED
+    assert dependency_result.metadata["parse_errors"] == []
+    assert app_result.metadata["parse_errors"] == []
 
 
 def test_fastapi_detector_supports_aliased_class_import(tmp_path):

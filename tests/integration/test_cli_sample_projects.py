@@ -289,3 +289,181 @@ def test_flask_debug_project_blocks_release_end_to_end(tmp_path):
         for evidence in debug_result["evidence"]
     )
     assert (output_dir / "release_report.md").is_file()
+
+
+DOCKER_RULE_IDS = {
+    "RG-DOCKER-001",
+    "RG-DOCKER-002",
+    "RG-DOCKER-003",
+    "RG-DOCKER-004",
+    "RG-DOCKER-005",
+    "RG-DOCKER-006",
+    "RG-DOCKER-007",
+    "RG-DOCKER-008",
+}
+
+
+def get_docker_results(payload):
+    return {
+        result["rule_id"]: result
+        for result in payload["results"]
+        if result["rule_id"] in DOCKER_RULE_IDS
+    }
+
+
+def test_docker_good_project_passes_end_to_end(tmp_path):
+    output_dir = tmp_path / "docker-good-report"
+
+    completed = run_releaseguard(
+        "docker_good_project",
+        output_dir,
+        skip_pytest_execution=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+    terminal_payload = json.loads(completed.stdout)
+    file_payload = load_file_payload(output_dir)
+    results = get_docker_results(file_payload)
+    markdown = (output_dir / "release_report.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert terminal_payload == file_payload
+    assert file_payload["summary"]["total"] == 20
+    assert file_payload["summary"]["passed"] == 14
+    assert file_payload["summary"]["skipped"] == 6
+    assert file_payload["summary"]["warning"] == 0
+    assert file_payload["summary"]["failed"] == 0
+    assert file_payload["summary"]["blocking"] == 0
+
+    assert set(results) == DOCKER_RULE_IDS
+    assert all(
+        result["status"] == "passed"
+        for result in results.values()
+    )
+    assert "RG-DOCKER-001" in markdown
+    assert "RG-DOCKER-008" in markdown
+
+
+def test_docker_style_warning_is_nonblocking_end_to_end(
+    tmp_path,
+):
+    output_dir = tmp_path / "docker-style-report"
+
+    completed = run_releaseguard(
+        "docker_style_warning_project",
+        output_dir,
+        skip_pytest_execution=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+    terminal_payload = json.loads(completed.stdout)
+    file_payload = load_file_payload(output_dir)
+    results = get_docker_results(file_payload)
+
+    assert terminal_payload == file_payload
+    assert file_payload["summary"]["total"] == 20
+    assert file_payload["summary"]["passed"] == 13
+    assert file_payload["summary"]["skipped"] == 6
+    assert file_payload["summary"]["warning"] == 1
+    assert file_payload["summary"]["failed"] == 0
+    assert file_payload["summary"]["blocking"] == 0
+
+    style_result = results["RG-DOCKER-008"]
+
+    assert all(
+        results[rule_id]["status"] == "passed"
+        for rule_id in DOCKER_RULE_IDS - {"RG-DOCKER-008"}
+    )
+    assert style_result["status"] == "warning"
+    assert style_result["risk_level"] == "low"
+    assert style_result["should_block_release"] is False
+    assert any(
+        "found `from`; expected `FROM`" in evidence
+        for evidence in style_result["evidence"]
+    )
+    assert (output_dir / "release_report.md").is_file()
+
+
+def test_missing_dockerfile_with_compose_intent_blocks_end_to_end(
+    tmp_path,
+):
+    output_dir = tmp_path / "missing-docker-report"
+
+    completed = run_releaseguard(
+        "missing_docker_project",
+        output_dir,
+        skip_pytest_execution=True,
+    )
+
+    assert completed.returncode == 1, completed.stderr
+
+    terminal_payload = json.loads(completed.stdout)
+    file_payload = load_file_payload(output_dir)
+    results = get_docker_results(file_payload)
+
+    assert terminal_payload == file_payload
+    assert file_payload["summary"]["total"] == 20
+    assert file_payload["summary"]["passed"] == 6
+    assert file_payload["summary"]["skipped"] == 13
+    assert file_payload["summary"]["warning"] == 0
+    assert file_payload["summary"]["failed"] == 1
+    assert file_payload["summary"]["blocking"] == 1
+
+    existence_result = results["RG-DOCKER-001"]
+
+    assert existence_result["status"] == "failed"
+    assert existence_result["risk_level"] == "high"
+    assert existence_result["should_block_release"] is True
+    assert any(
+        "Compose root-build intent" in evidence
+        for evidence in existence_result["evidence"]
+    )
+    assert all(
+        results[rule_id]["status"] == "skipped"
+        for rule_id in DOCKER_RULE_IDS - {"RG-DOCKER-001"}
+    )
+    assert (output_dir / "release_report.md").is_file()
+
+
+def test_invalid_dockerfile_order_blocks_end_to_end(
+    tmp_path,
+):
+    output_dir = tmp_path / "docker-invalid-order-report"
+
+    completed = run_releaseguard(
+        "docker_invalid_order_project",
+        output_dir,
+        skip_pytest_execution=True,
+    )
+
+    assert completed.returncode == 1, completed.stderr
+
+    terminal_payload = json.loads(completed.stdout)
+    file_payload = load_file_payload(output_dir)
+    results = get_docker_results(file_payload)
+
+    assert terminal_payload == file_payload
+    assert file_payload["summary"]["total"] == 20
+    assert file_payload["summary"]["passed"] == 13
+    assert file_payload["summary"]["skipped"] == 6
+    assert file_payload["summary"]["warning"] == 0
+    assert file_payload["summary"]["failed"] == 1
+    assert file_payload["summary"]["blocking"] == 1
+
+    position_result = results["RG-DOCKER-003"]
+
+    assert position_result["status"] == "failed"
+    assert position_result["risk_level"] == "high"
+    assert position_result["should_block_release"] is True
+    assert any(
+        "`WORKDIR /app`" in evidence
+        for evidence in position_result["evidence"]
+    )
+    assert all(
+        results[rule_id]["status"] == "passed"
+        for rule_id in DOCKER_RULE_IDS - {"RG-DOCKER-003"}
+    )
+    assert (output_dir / "release_report.md").is_file()

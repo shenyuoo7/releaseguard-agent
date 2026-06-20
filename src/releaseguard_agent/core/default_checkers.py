@@ -12,6 +12,7 @@ from releaseguard_agent.checkers.python.test_structure_checker import (
 )
 from releaseguard_agent.core.checker_runner import CheckerRunner
 from releaseguard_agent.detectors.fastapi_detector import FastAPIDetector
+from releaseguard_agent.detectors.flask_detector import FlaskDetector
 
 
 def get_default_python_checkers(
@@ -25,6 +26,7 @@ def get_default_python_checkers(
         TestStructureChecker(),
         PytestConfigChecker(),
         FastAPIDetector(),
+        FlaskDetector(),
     ]
 
     if include_pytest_execution:

@@ -75,8 +75,8 @@ def test_clean_python_project_passes_end_to_end(tmp_path):
     )
 
     assert terminal_payload == file_payload
-    assert file_payload["summary"]["total"] == 11
-    assert file_payload["summary"]["skipped"] == 2
+    assert file_payload["summary"]["total"] == 15
+    assert file_payload["summary"]["skipped"] == 6
     assert file_payload["summary"]["failed"] == 0
     assert file_payload["summary"]["blocking"] == 0
     assert "# ReleaseGuard Report" in markdown
@@ -105,8 +105,8 @@ def test_failed_tests_project_blocks_release_end_to_end(tmp_path):
     )
 
     assert terminal_payload == file_payload
-    assert file_payload["summary"]["total"] == 11
-    assert file_payload["summary"]["skipped"] == 2
+    assert file_payload["summary"]["total"] == 15
+    assert file_payload["summary"]["skipped"] == 6
     assert file_payload["summary"]["failed"] == 1
     assert file_payload["summary"]["blocking"] == 1
     assert pytest_run_result["status"] == "failed"
@@ -135,10 +135,10 @@ def test_fastapi_good_project_passes_end_to_end(tmp_path):
     }
 
     assert terminal_payload == file_payload
-    assert file_payload["summary"]["total"] == 8
+    assert file_payload["summary"]["total"] == 12
     assert file_payload["summary"]["failed"] == 0
     assert file_payload["summary"]["blocking"] == 0
-    assert file_payload["summary"]["skipped"] == 0
+    assert file_payload["summary"]["skipped"] == 4
     assert results["RG-FASTAPI-001"]["status"] == "passed"
     assert results["RG-FASTAPI-002"]["status"] == "passed"
     assert (output_dir / "release_report.md").is_file()
@@ -164,10 +164,10 @@ def test_fastapi_bad_project_blocks_missing_dependency(tmp_path):
     }
 
     assert terminal_payload == file_payload
-    assert file_payload["summary"]["total"] == 8
+    assert file_payload["summary"]["total"] == 12
     assert file_payload["summary"]["failed"] == 1
     assert file_payload["summary"]["blocking"] == 1
-    assert file_payload["summary"]["skipped"] == 0
+    assert file_payload["summary"]["skipped"] == 4
 
     dependency_result = results["RG-FASTAPI-001"]
     assert dependency_result["status"] == "failed"
@@ -175,4 +175,117 @@ def test_fastapi_bad_project_blocks_missing_dependency(tmp_path):
     assert dependency_result["should_block_release"] is True
 
     assert results["RG-FASTAPI-002"]["status"] == "passed"
+    assert (output_dir / "release_report.md").is_file()
+
+FLASK_RULE_IDS = {
+    "RG-FLASK-001",
+    "RG-FLASK-002",
+    "RG-FLASK-003",
+    "RG-SEC-002",
+}
+
+
+def get_flask_results(payload):
+    return {
+        result["rule_id"]: result
+        for result in payload["results"]
+        if result["rule_id"] in FLASK_RULE_IDS
+    }
+
+
+def test_flask_good_project_passes_end_to_end(tmp_path):
+    output_dir = tmp_path / "flask-good-report"
+
+    completed = run_releaseguard(
+        "flask_good_project",
+        output_dir,
+        skip_pytest_execution=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+    terminal_payload = json.loads(completed.stdout)
+    file_payload = load_file_payload(output_dir)
+    results = get_flask_results(file_payload)
+
+    assert terminal_payload == file_payload
+    assert file_payload["summary"]["total"] == 12
+    assert file_payload["summary"]["passed"] == 10
+    assert file_payload["summary"]["skipped"] == 2
+    assert file_payload["summary"]["warning"] == 0
+    assert file_payload["summary"]["failed"] == 0
+    assert file_payload["summary"]["blocking"] == 0
+
+    assert results["RG-FLASK-001"]["status"] == "passed"
+    assert results["RG-FLASK-002"]["status"] == "passed"
+    assert results["RG-FLASK-003"]["status"] == "passed"
+    assert results["RG-SEC-002"]["status"] == "passed"
+    assert (output_dir / "release_report.md").is_file()
+
+
+def test_flask_development_server_warns_end_to_end(tmp_path):
+    output_dir = tmp_path / "flask-development-report"
+
+    completed = run_releaseguard(
+        "flask_dev_server_project",
+        output_dir,
+        skip_pytest_execution=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+    terminal_payload = json.loads(completed.stdout)
+    file_payload = load_file_payload(output_dir)
+    results = get_flask_results(file_payload)
+
+    assert terminal_payload == file_payload
+    assert file_payload["summary"]["total"] == 12
+    assert file_payload["summary"]["passed"] == 9
+    assert file_payload["summary"]["skipped"] == 2
+    assert file_payload["summary"]["warning"] == 1
+    assert file_payload["summary"]["failed"] == 0
+    assert file_payload["summary"]["blocking"] == 0
+
+    server_result = results["RG-FLASK-003"]
+
+    assert server_result["status"] == "warning"
+    assert server_result["risk_level"] == "medium"
+    assert server_result["should_block_release"] is False
+    assert results["RG-SEC-002"]["status"] == "passed"
+    assert (output_dir / "release_report.md").is_file()
+
+
+def test_flask_debug_project_blocks_release_end_to_end(tmp_path):
+    output_dir = tmp_path / "flask-debug-report"
+
+    completed = run_releaseguard(
+        "flask_bad_project",
+        output_dir,
+        skip_pytest_execution=True,
+    )
+
+    assert completed.returncode == 1, completed.stderr
+
+    terminal_payload = json.loads(completed.stdout)
+    file_payload = load_file_payload(output_dir)
+    results = get_flask_results(file_payload)
+
+    assert terminal_payload == file_payload
+    assert file_payload["summary"]["total"] == 12
+    assert file_payload["summary"]["passed"] == 8
+    assert file_payload["summary"]["skipped"] == 2
+    assert file_payload["summary"]["warning"] == 1
+    assert file_payload["summary"]["failed"] == 1
+    assert file_payload["summary"]["blocking"] == 1
+
+    debug_result = results["RG-SEC-002"]
+
+    assert results["RG-FLASK-003"]["status"] == "warning"
+    assert debug_result["status"] == "failed"
+    assert debug_result["risk_level"] == "high"
+    assert debug_result["should_block_release"] is True
+    assert any(
+        "app.run(debug=True)" in evidence
+        for evidence in debug_result["evidence"]
+    )
     assert (output_dir / "release_report.md").is_file()

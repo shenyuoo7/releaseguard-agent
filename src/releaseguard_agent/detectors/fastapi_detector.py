@@ -1,16 +1,16 @@
 import ast
-import configparser
-import re
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from releaseguard_agent.checkers.base import BaseChecker
 from releaseguard_agent.models.check_result import (
     CheckResult,
     CheckStatus,
     RiskLevel,
+)
+from releaseguard_agent.scanners.python_dependency_scanner import (
+    DependencyMatch,
+    PythonDependencyScanner,
 )
 
 
@@ -31,22 +31,6 @@ class SourceMatch:
             "source_line": self.source_line,
             "match_type": self.match_type,
             "target_name": self.target_name,
-        }
-
-
-@dataclass(frozen=True)
-class DependencyMatch:
-    """One FastAPI dependency declaration match."""
-
-    file_path: str
-    line_number: int | None
-    declaration: str
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "file_path": self.file_path,
-            "line_number": self.line_number,
-            "declaration": self.declaration,
         }
 
 
@@ -83,15 +67,7 @@ class FastAPIDetector(BaseChecker):
         "tests",
     )
 
-    dependency_files: tuple[str, ...] = (
-        "requirements.txt",
-        "pyproject.toml",
-        "Pipfile",
-        "poetry.lock",
-        "uv.lock",
-        "setup.py",
-        "setup.cfg",
-    )
+    dependency_scanner = PythonDependencyScanner()
 
     def run(self, project_path: Path) -> list[CheckResult]:
         """Run FastAPI detection against a target project."""
@@ -104,7 +80,10 @@ class FastAPIDetector(BaseChecker):
                 source_scan,
             )
 
-        dependency_matches = self._find_dependency_matches(project_path)
+        dependency_matches = self.dependency_scanner.find_matches(
+            project_path,
+            "fastapi",
+        )
 
         return [
             self._build_dependency_result(
@@ -186,7 +165,9 @@ class FastAPIDetector(BaseChecker):
         metadata = {
             "fastapi_usage_detected": True,
             "checked_python_file_count": source_scan.checked_file_count,
-            "checked_dependency_files": list(self.dependency_files),
+            "checked_dependency_files": list(
+                self.dependency_scanner.dependency_files
+            ),
             "usage_matches": [
                 match.to_dict()
                 for match in source_scan.usage_matches
@@ -245,7 +226,9 @@ class FastAPIDetector(BaseChecker):
                 *usage_evidence,
                 (
                     "Checked dependency files: "
-                    + ", ".join(self.dependency_files)
+                    + ", ".join(
+                        self.dependency_scanner.dependency_files
+                    )
                 ),
                 "No FastAPI dependency declaration was found.",
             ],
@@ -551,251 +534,6 @@ class FastAPIDetector(BaseChecker):
             target_name=target_name,
         )
 
-    def _find_dependency_matches(
-        self,
-        project_path: Path,
-    ) -> list[DependencyMatch]:
-        matches: list[DependencyMatch] = []
-
-        for file_name in self.dependency_files:
-            dependency_file = project_path / file_name
-
-            if not dependency_file.is_file():
-                continue
-
-            if file_name == "requirements.txt":
-                matches.extend(
-                    self._read_requirements_matches(
-                        dependency_file,
-                        project_path,
-                    )
-                )
-            elif file_name in {
-                "pyproject.toml",
-                "Pipfile",
-                "poetry.lock",
-                "uv.lock",
-            }:
-                matches.extend(
-                    self._read_toml_matches(
-                        dependency_file,
-                        project_path,
-                    )
-                )
-            elif file_name == "setup.cfg":
-                matches.extend(
-                    self._read_setup_cfg_matches(
-                        dependency_file,
-                        project_path,
-                    )
-                )
-            elif file_name == "setup.py":
-                matches.extend(
-                    self._read_setup_py_matches(
-                        dependency_file,
-                        project_path,
-                    )
-                )
-
-        return self._deduplicate_dependency_matches(matches)
-
-    def _read_requirements_matches(
-        self,
-        path: Path,
-        project_path: Path,
-    ) -> list[DependencyMatch]:
-        try:
-            lines = path.read_text(encoding="utf-8-sig").splitlines()
-        except (OSError, UnicodeDecodeError):
-            return []
-
-        matches: list[DependencyMatch] = []
-
-        for line_number, line in enumerate(lines, start=1):
-            package_name = self._requirement_package_name(line)
-
-            if package_name == "fastapi":
-                matches.append(
-                    DependencyMatch(
-                        file_path=self._relative_path(path, project_path),
-                        line_number=line_number,
-                        declaration=line.strip(),
-                    )
-                )
-
-        return matches
-
-    def _read_toml_matches(
-        self,
-        path: Path,
-        project_path: Path,
-    ) -> list[DependencyMatch]:
-        try:
-            source = path.read_text(encoding="utf-8-sig")
-            data = tomllib.loads(source)
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
-            return []
-
-        declarations: list[str] = []
-
-        if path.name == "pyproject.toml":
-            project_dependencies = (
-                data.get("project", {}).get("dependencies", [])
-            )
-            declarations.extend(
-                str(value)
-                for value in project_dependencies
-                if self._requirement_package_name(str(value)) == "fastapi"
-            )
-
-            poetry_dependencies = (
-                data.get("tool", {})
-                .get("poetry", {})
-                .get("dependencies", {})
-            )
-            if isinstance(poetry_dependencies, dict):
-                declarations.extend(
-                    str(name)
-                    for name in poetry_dependencies
-                    if self._normalize_package_name(str(name)) == "fastapi"
-                )
-
-        elif path.name == "Pipfile":
-            packages = data.get("packages", {})
-            if isinstance(packages, dict):
-                declarations.extend(
-                    str(name)
-                    for name in packages
-                    if self._normalize_package_name(str(name)) == "fastapi"
-                )
-
-        elif path.name in {"poetry.lock", "uv.lock"}:
-            packages = data.get("package", [])
-            if isinstance(packages, list):
-                declarations.extend(
-                    str(package.get("name"))
-                    for package in packages
-                    if isinstance(package, dict)
-                    and self._normalize_package_name(
-                        str(package.get("name", ""))
-                    )
-                    == "fastapi"
-                )
-
-        return [
-            DependencyMatch(
-                file_path=self._relative_path(path, project_path),
-                line_number=self._find_fastapi_line_number(source),
-                declaration=declaration,
-            )
-            for declaration in declarations
-        ]
-
-    def _read_setup_cfg_matches(
-        self,
-        path: Path,
-        project_path: Path,
-    ) -> list[DependencyMatch]:
-        parser = configparser.ConfigParser(interpolation=None)
-
-        try:
-            parser.read(path, encoding="utf-8-sig")
-            source = path.read_text(encoding="utf-8-sig")
-        except (configparser.Error, OSError, UnicodeDecodeError):
-            return []
-
-        if not parser.has_option("options", "install_requires"):
-            return []
-
-        declarations = parser.get("options", "install_requires").splitlines()
-
-        return [
-            DependencyMatch(
-                file_path=self._relative_path(path, project_path),
-                line_number=self._find_fastapi_line_number(source),
-                declaration=declaration.strip(),
-            )
-            for declaration in declarations
-            if self._requirement_package_name(declaration) == "fastapi"
-        ]
-
-    def _read_setup_py_matches(
-        self,
-        path: Path,
-        project_path: Path,
-    ) -> list[DependencyMatch]:
-        try:
-            source = path.read_text(encoding="utf-8-sig")
-            tree = ast.parse(source, filename=str(path))
-        except (OSError, UnicodeDecodeError, SyntaxError):
-            return []
-
-        matches: list[DependencyMatch] = []
-
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-
-            for keyword in node.keywords:
-                if keyword.arg != "install_requires":
-                    continue
-
-                for value in self._string_values(keyword.value):
-                    if self._requirement_package_name(value) == "fastapi":
-                        matches.append(
-                            DependencyMatch(
-                                file_path=self._relative_path(
-                                    path,
-                                    project_path,
-                                ),
-                                line_number=keyword.value.lineno,
-                                declaration=value,
-                            )
-                        )
-
-        return matches
-
-    def _string_values(self, node: ast.AST) -> list[str]:
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return [node.value]
-
-        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-            return [
-                value
-                for element in node.elts
-                for value in self._string_values(element)
-            ]
-
-        return []
-
-    def _requirement_package_name(self, value: str) -> str | None:
-        cleaned = value.strip()
-
-        if not cleaned or cleaned.startswith(("#", "-", "--")):
-            return None
-
-        match = re.match(
-            r"^([A-Za-z0-9][A-Za-z0-9._-]*)",
-            cleaned,
-        )
-        if match is None:
-            return None
-
-        return self._normalize_package_name(match.group(1))
-
-    def _normalize_package_name(self, value: str) -> str:
-        return re.sub(r"[-_.]+", "-", value).lower()
-
-    def _find_fastapi_line_number(self, source: str) -> int | None:
-        for line_number, line in enumerate(
-            source.splitlines(),
-            start=1,
-        ):
-            if re.search(r"\bfastapi\b", line, flags=re.IGNORECASE):
-                return line_number
-
-        return None
-
     def _format_source_evidence(
         self,
         matches: tuple[SourceMatch, ...],
@@ -827,12 +565,6 @@ class FastAPIDetector(BaseChecker):
         self,
         matches: list[SourceMatch],
     ) -> list[SourceMatch]:
-        return list(dict.fromkeys(matches))
-
-    def _deduplicate_dependency_matches(
-        self,
-        matches: list[DependencyMatch],
-    ) -> list[DependencyMatch]:
         return list(dict.fromkeys(matches))
 
     def _should_ignore_path(self, path: Path) -> bool:

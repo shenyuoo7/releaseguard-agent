@@ -75,8 +75,8 @@ def test_clean_python_project_passes_end_to_end(tmp_path):
     )
 
     assert terminal_payload == file_payload
-    assert file_payload["summary"]["total"] == 15
-    assert file_payload["summary"]["skipped"] == 6
+    assert file_payload["summary"]["total"] == 23
+    assert file_payload["summary"]["skipped"] == 14
     assert file_payload["summary"]["failed"] == 0
     assert file_payload["summary"]["blocking"] == 0
     assert "# ReleaseGuard Report" in markdown
@@ -105,8 +105,8 @@ def test_failed_tests_project_blocks_release_end_to_end(tmp_path):
     )
 
     assert terminal_payload == file_payload
-    assert file_payload["summary"]["total"] == 15
-    assert file_payload["summary"]["skipped"] == 6
+    assert file_payload["summary"]["total"] == 23
+    assert file_payload["summary"]["skipped"] == 14
     assert file_payload["summary"]["failed"] == 1
     assert file_payload["summary"]["blocking"] == 1
     assert pytest_run_result["status"] == "failed"
@@ -135,10 +135,10 @@ def test_fastapi_good_project_passes_end_to_end(tmp_path):
     }
 
     assert terminal_payload == file_payload
-    assert file_payload["summary"]["total"] == 12
+    assert file_payload["summary"]["total"] == 20
     assert file_payload["summary"]["failed"] == 0
     assert file_payload["summary"]["blocking"] == 0
-    assert file_payload["summary"]["skipped"] == 4
+    assert file_payload["summary"]["skipped"] == 12
     assert results["RG-FASTAPI-001"]["status"] == "passed"
     assert results["RG-FASTAPI-002"]["status"] == "passed"
     assert (output_dir / "release_report.md").is_file()
@@ -164,10 +164,10 @@ def test_fastapi_bad_project_blocks_missing_dependency(tmp_path):
     }
 
     assert terminal_payload == file_payload
-    assert file_payload["summary"]["total"] == 12
+    assert file_payload["summary"]["total"] == 20
     assert file_payload["summary"]["failed"] == 1
     assert file_payload["summary"]["blocking"] == 1
-    assert file_payload["summary"]["skipped"] == 4
+    assert file_payload["summary"]["skipped"] == 12
 
     dependency_result = results["RG-FASTAPI-001"]
     assert dependency_result["status"] == "failed"
@@ -209,9 +209,9 @@ def test_flask_good_project_passes_end_to_end(tmp_path):
     results = get_flask_results(file_payload)
 
     assert terminal_payload == file_payload
-    assert file_payload["summary"]["total"] == 12
+    assert file_payload["summary"]["total"] == 20
     assert file_payload["summary"]["passed"] == 10
-    assert file_payload["summary"]["skipped"] == 2
+    assert file_payload["summary"]["skipped"] == 10
     assert file_payload["summary"]["warning"] == 0
     assert file_payload["summary"]["failed"] == 0
     assert file_payload["summary"]["blocking"] == 0
@@ -239,9 +239,9 @@ def test_flask_development_server_warns_end_to_end(tmp_path):
     results = get_flask_results(file_payload)
 
     assert terminal_payload == file_payload
-    assert file_payload["summary"]["total"] == 12
+    assert file_payload["summary"]["total"] == 20
     assert file_payload["summary"]["passed"] == 9
-    assert file_payload["summary"]["skipped"] == 2
+    assert file_payload["summary"]["skipped"] == 10
     assert file_payload["summary"]["warning"] == 1
     assert file_payload["summary"]["failed"] == 0
     assert file_payload["summary"]["blocking"] == 0
@@ -271,9 +271,9 @@ def test_flask_debug_project_blocks_release_end_to_end(tmp_path):
     results = get_flask_results(file_payload)
 
     assert terminal_payload == file_payload
-    assert file_payload["summary"]["total"] == 12
+    assert file_payload["summary"]["total"] == 20
     assert file_payload["summary"]["passed"] == 8
-    assert file_payload["summary"]["skipped"] == 2
+    assert file_payload["summary"]["skipped"] == 10
     assert file_payload["summary"]["warning"] == 1
     assert file_payload["summary"]["failed"] == 1
     assert file_payload["summary"]["blocking"] == 1

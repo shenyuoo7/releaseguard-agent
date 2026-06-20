@@ -53,6 +53,8 @@ def test_check_command_runs_default_non_dynamic_checks(
     assert "blocking: 0" in captured.out
     assert "dependency_checker" in captured.out
     assert "pytest_config_checker" in captured.out
+    assert "docker_checker" in captured.out
+    assert "docker_style_checker" in captured.out
 
 
 def test_check_command_returns_one_when_blocking_findings_exist(
@@ -218,6 +220,8 @@ def test_list_checkers_outputs_default_checker_names(capsys):
     assert "pytest_execution_checker" in captured.out
     assert "fastapi_detector" in captured.out
     assert "flask_detector" in captured.out
+    assert "docker_checker" in captured.out
+    assert "docker_style_checker" in captured.out
 
 
 def test_list_checkers_can_skip_pytest_execution_checker(capsys):
@@ -233,3 +237,5 @@ def test_list_checkers_can_skip_pytest_execution_checker(capsys):
     assert "pytest_execution_checker" not in captured.out
     assert "fastapi_detector" in captured.out
     assert "flask_detector" in captured.out
+    assert "docker_checker" in captured.out
+    assert "docker_style_checker" in captured.out

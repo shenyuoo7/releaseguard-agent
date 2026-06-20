@@ -1,4 +1,10 @@
 from releaseguard_agent.checkers.base import BaseChecker
+from releaseguard_agent.checkers.common.docker_checker import (
+    DockerChecker,
+)
+from releaseguard_agent.checkers.common.docker_style_checker import (
+    DockerStyleChecker,
+)
 from releaseguard_agent.checkers.common.env_example_checker import EnvExampleChecker
 from releaseguard_agent.checkers.python.dependency_checker import DependencyChecker
 from releaseguard_agent.checkers.python.pytest_config_checker import (
@@ -27,6 +33,8 @@ def get_default_python_checkers(
         PytestConfigChecker(),
         FastAPIDetector(),
         FlaskDetector(),
+        DockerChecker(),
+        DockerStyleChecker(),
     ]
 
     if include_pytest_execution:

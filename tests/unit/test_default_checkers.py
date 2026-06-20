@@ -17,6 +17,12 @@ from releaseguard_agent.core.default_checkers import (
 )
 from releaseguard_agent.detectors.fastapi_detector import FastAPIDetector
 from releaseguard_agent.detectors.flask_detector import FlaskDetector
+from releaseguard_agent.checkers.common.docker_checker import (
+    DockerChecker,
+)
+from releaseguard_agent.checkers.common.docker_style_checker import (
+    DockerStyleChecker,
+)
 
 
 def test_default_python_checkers_are_in_expected_order():
@@ -29,6 +35,8 @@ def test_default_python_checkers_are_in_expected_order():
         PytestConfigChecker,
         FastAPIDetector,
         FlaskDetector,
+        DockerChecker,
+        DockerStyleChecker,
         PytestExecutionChecker,
     ]
 
@@ -39,6 +47,8 @@ def test_default_python_checkers_are_in_expected_order():
         "pytest_config_checker",
         "fastapi_detector",
         "flask_detector",
+        "docker_checker",
+        "docker_style_checker",
         "pytest_execution_checker",
     ]
 
@@ -53,6 +63,8 @@ def test_default_python_checkers_can_exclude_pytest_execution():
         PytestConfigChecker,
         FastAPIDetector,
         FlaskDetector,
+        DockerChecker,
+        DockerStyleChecker,
     ]
 
     assert "pytest_execution_checker" not in [
@@ -70,6 +82,8 @@ def test_default_python_checker_names_match_default_checker_order():
         "pytest_config_checker",
         "fastapi_detector",
         "flask_detector",
+        "docker_checker",
+        "docker_style_checker",
         "pytest_execution_checker",
     )
 
@@ -96,6 +110,8 @@ def test_build_default_python_runner_returns_checker_runner():
         "pytest_config_checker",
         "fastapi_detector",
         "flask_detector",
+        "docker_checker",
+        "docker_style_checker",
     ]
 
 
@@ -122,3 +138,12 @@ def test_default_python_runner_can_run_non_dynamic_checks(tmp_path):
     assert "RG-TEST-003" not in rule_ids
     assert "RG-TEST-004" not in rule_ids
     assert "RG-TEST-005" not in rule_ids
+
+    assert "RG-DOCKER-001" in rule_ids
+    assert "RG-DOCKER-002" in rule_ids
+    assert "RG-DOCKER-003" in rule_ids
+    assert "RG-DOCKER-004" in rule_ids
+    assert "RG-DOCKER-005" in rule_ids
+    assert "RG-DOCKER-006" in rule_ids
+    assert "RG-DOCKER-007" in rule_ids
+    assert "RG-DOCKER-008" in rule_ids

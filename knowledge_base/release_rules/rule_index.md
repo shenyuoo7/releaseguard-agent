@@ -33,6 +33,9 @@ This file is the global index for the first ReleaseGuard release-rule knowledge 
 | RG-FASTAPI-005 | FastAPI tests can run through pytest | FastAPITestChecker | FastAPI Testing | source-backed | high | block | command_result | phase-1 |
 | RG-FASTAPI-006 | FastAPI tests assert response status codes | FastAPITestChecker | FastAPI Testing | source-backed | medium | warn | matched_lines | phase-1 |
 | RG-FASTAPI-007 | Health-check route exists | FastAPIHealthChecker | ReleaseGuard default policy; stronger operations source needed | releaseguard-default | medium | warn | route_match | phase-1 |
+| RG-FLASK-001 | Flask dependency is declared when Flask is used | FlaskDetector | Flask Installation; ReleaseGuard dependency policy | releaseguard-default | high | block | dependency_line | phase-1 |
+| RG-FLASK-002 | Flask application instance is detectable | FlaskDetector | Flask Quickstart | source-backed | high | block | matched_lines | phase-1 |
+| RG-FLASK-003 | Release startup does not rely on the Flask development server | FlaskDetector | Flask Quickstart; Flask Deploying To Production | source-backed | medium | conditional | matched_lines | phase-1 |
 | RG-DOCKER-001 | Dockerfile exists when containerized release is expected | DockerChecker | Dockerfile reference; ReleaseGuard container policy | releaseguard-default | high | conditional | file_exists | phase-1 |
 | RG-DOCKER-002 | Dockerfile contains `FROM` | DockerChecker | Dockerfile reference | source-backed | high | block | docker_instruction | phase-1 |
 | RG-DOCKER-003 | `FROM` appears in a valid position | DockerChecker | Dockerfile reference | source-backed | high | block | docker_instruction_order | phase-1 |
@@ -42,7 +45,7 @@ This file is the global index for the first ReleaseGuard release-rule knowledge 
 | RG-DOCKER-007 | Dockerfile contains `CMD` or `ENTRYPOINT` | DockerChecker | Dockerfile reference; ReleaseGuard runnable image policy | releaseguard-default | high | conditional | docker_instruction | phase-1 |
 | RG-DOCKER-008 | Dockerfile instruction casing follows uppercase convention | DockerStyleChecker | Dockerfile reference | source-backed | low | info | docker_instruction_style | phase-1 |
 | RG-SEC-001 | Suspected hardcoded sensitive values are detected | SecurityBaselineChecker | OWASP ASVS general basis; exact mapping needed | needs-source-mapping | high | block | redacted_matched_lines | phase-1 |
-| RG-SEC-002 | Flask debug mode is not enabled for release | SecurityBaselineChecker | ReleaseGuard security baseline; Flask source needed | needs-source-mapping | high | block | matched_lines | phase-1 |
+| RG-SEC-002 | Flask debug mode is not explicitly enabled for release | FlaskDetector | Flask Debugging; Flask Quickstart | source-backed | high | block | matched_lines | phase-1 |
 | RG-SEC-003 | Overly broad CORS configuration is detected | SecurityBaselineChecker | OWASP ASVS general basis; exact mapping needed | needs-source-mapping | high | conditional | matched_lines | phase-1 |
 | RG-SEC-004 | Risky command execution patterns are detected | SecurityBaselineChecker | OWASP ASVS command-injection reference | source-backed | medium | conditional | matched_lines | phase-1 |
 | RG-SEC-005 | Production security configuration guidance exists | SecurityBaselineChecker | ReleaseGuard default policy | releaseguard-default | medium | warn | doc_section_match | phase-1 |

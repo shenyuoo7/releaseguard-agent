@@ -37,6 +37,14 @@ This file records ReleaseGuard's professional default decisions for phase-one ru
 | RG-FASTAPI-006 | status-code assertions | Warn if absent | source-backed | warn | Official examples assert status codes, but exact assertion strategy varies. |
 | RG-FASTAPI-007 | health route | Warn if absent | releaseguard-default | warn | Useful release-readiness policy, not an official FastAPI requirement. |
 
+## Flask
+
+| rule_id | concept | default_decision | support_level | blocking_policy | reason |
+|---|---|---|---|---|---|
+| RG-FLASK-001 | Flask dependency declaration | Block if source uses Flask but dependency files do not declare it | releaseguard-default | block | Flask must be installed to run; dependency-file declaration is ReleaseGuard's reproducible-release policy. |
+| RG-FLASK-002 | Flask application instance | Block if a Flask project has no detectable `Flask(...)` application instance | source-backed | block | Flask Quickstart identifies the Flask instance as the WSGI application. |
+| RG-FLASK-003 | Flask development server | Report explicit `app.run()` evidence conditionally | source-backed | conditional | Flask forbids the development server in production, but static source presence does not prove it is the production startup path. |
+
 ## Docker
 
 | rule_id | concept | default_decision | support_level | blocking_policy | reason |
@@ -55,7 +63,7 @@ This file records ReleaseGuard's professional default decisions for phase-one ru
 | rule_id | concept | default_decision | support_level | blocking_policy | reason |
 |---|---|---|---|---|---|
 | RG-SEC-001 | hardcoded sensitive values | Block strong secret-like findings with redacted evidence | needs-source-mapping | block | Important baseline, but exact ASVS or secret-scanning source mapping is still needed. |
-| RG-SEC-002 | Flask debug mode | Block for release contexts | needs-source-mapping | block | Mature production-security concern; add direct Flask docs before strong source-backed claims. |
+| RG-SEC-002 | Flask debug mode | Block explicit `debug=True` for release contexts | source-backed | block | Flask official documentation says the built-in debugger must not run in production and identifies `app.run(debug=True)` as enabling debug mode. |
 | RG-SEC-003 | broad CORS | Conditional impact | needs-source-mapping | conditional | Risk depends on production context and needs stronger source mapping. |
 | RG-SEC-004 | risky command execution | Conditional impact | source-backed | conditional | ASVS includes command injection requirement reference example. |
 | RG-SEC-005 | production security documentation | Warn if absent | releaseguard-default | warn | ReleaseGuard handoff policy for safer deployments. |

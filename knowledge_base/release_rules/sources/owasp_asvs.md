@@ -19,7 +19,6 @@
 | rule_id | ReleaseGuard rule | support_level | blocking_policy | evidence_type | boundary |
 |---|---|---|---|---|---|
 | RG-SEC-001 | Check for suspected hardcoded sensitive values | needs-source-mapping | block | redacted_matched_lines | Useful security baseline, but needs exact ASVS or other source mapping before audit-level claims. |
-| RG-SEC-002 | Check whether Flask debug mode is enabled | needs-source-mapping | block | matched_lines | Mature Flask production-security practice; needs direct Flask source mapping. |
 | RG-SEC-003 | Check for overly broad CORS configuration | needs-source-mapping | conditional | matched_lines | Useful baseline, but needs exact CORS/security source mapping. |
 | RG-SEC-004 | Check for risky command execution patterns | source-backed | conditional | matched_lines | ASVS page includes OS command injection requirement reference format and example. |
 | RG-SEC-005 | Check for production security configuration documentation | releaseguard-default | warn | doc_section_match | ReleaseGuard handoff policy; not directly mandated by ASVS. |

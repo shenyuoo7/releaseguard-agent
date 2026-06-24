@@ -6,6 +6,11 @@ from releaseguard_agent.cli.main import (
     EXIT_USAGE_ERROR,
     main,
 )
+from releaseguard_agent.models.check_result import (
+    CheckResult,
+    CheckStatus,
+    RiskLevel,
+)
 
 
 def create_release_ready_project(project_path):
@@ -144,6 +149,114 @@ def test_check_command_writes_report_artifacts(
     assert terminal_payload == file_payload
 
 
+def test_check_command_writes_agent_advice_artifacts(
+    tmp_path,
+    capsys,
+):
+    create_release_ready_project(tmp_path)
+    advice_output_dir = tmp_path / "agent-advice"
+
+    exit_code = main(
+        [
+            "check",
+            str(tmp_path),
+            "--skip-pytest-execution",
+            "--format",
+            "json",
+            "--agent-advice-output-dir",
+            str(advice_output_dir),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    terminal_payload = json.loads(captured.out)
+
+    markdown_path = advice_output_dir / "release_decision_advice.md"
+    json_path = advice_output_dir / "release_decision_advice.json"
+
+    assert exit_code == EXIT_SUCCESS
+    assert captured.err == ""
+
+    assert markdown_path.is_file()
+    assert json_path.is_file()
+
+    markdown = markdown_path.read_text(encoding="utf-8")
+    advice_payload = json.loads(json_path.read_text(encoding="utf-8"))
+
+    assert terminal_payload["summary"]["blocking"] == 0
+    assert "# ReleaseGuard Agent Advice" in markdown
+    assert advice_payload["artifact_type"] == "release-decision-advice"
+    assert advice_payload["project_path"] == str(tmp_path.resolve())
+    assert advice_payload["workflow_result"]["decision"]["status"] == "ready"
+    assert advice_payload["explanation"]["status"] == "ready"
+
+
+def test_check_command_agent_advice_reuses_existing_results(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    calls = {
+        "build_runner": 0,
+        "run": 0,
+    }
+
+    class FakeRunner:
+        def run(self, project_path):
+            calls["run"] += 1
+
+            return [
+                CheckResult(
+                    checker_name="fake_checker",
+                    status=CheckStatus.PASSED,
+                    risk_level=RiskLevel.INFO,
+                    title="Fake check passed",
+                    message="The fake check passed.",
+                    rule_id="RG-DEPS-001",
+                    rule_source="Test rule source",
+                    file_path=str(project_path),
+                )
+            ]
+
+    def fake_build_default_python_runner(
+        *,
+        include_pytest_execution,
+    ):
+        calls["build_runner"] += 1
+        assert include_pytest_execution is False
+
+        return FakeRunner()
+
+    monkeypatch.setattr(
+        "releaseguard_agent.cli.main.build_default_python_runner",
+        fake_build_default_python_runner,
+    )
+
+    advice_output_dir = tmp_path / "agent-advice"
+
+    exit_code = main(
+        [
+            "check",
+            str(tmp_path),
+            "--skip-pytest-execution",
+            "--agent-advice-output-dir",
+            str(advice_output_dir),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == EXIT_SUCCESS
+    assert "ReleaseGuard Agent" in captured.out
+    assert calls == {
+        "build_runner": 1,
+        "run": 1,
+    }
+    assert (
+        advice_output_dir / "release_decision_advice.json"
+    ).is_file()
+
+
 def test_check_command_returns_usage_error_when_output_path_is_file(
     tmp_path,
     capsys,
@@ -171,6 +284,36 @@ def test_check_command_returns_usage_error_when_output_path_is_file(
     assert exit_code == EXIT_USAGE_ERROR
     assert captured.out == ""
     assert "Could not write report artifacts" in captured.err
+    assert str(output_path.resolve()) in captured.err
+
+
+def test_check_command_returns_usage_error_when_agent_advice_output_path_is_file(
+    tmp_path,
+    capsys,
+):
+    create_release_ready_project(tmp_path)
+
+    output_path = tmp_path / "agent-advice-target"
+    output_path.write_text(
+        "This is a file, not a directory.\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "check",
+            str(tmp_path),
+            "--skip-pytest-execution",
+            "--agent-advice-output-dir",
+            str(output_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == EXIT_USAGE_ERROR
+    assert captured.out == ""
+    assert "Could not write Agent advice artifacts" in captured.err
     assert str(output_path.resolve()) in captured.err
 
 

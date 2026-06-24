@@ -4,6 +4,14 @@ import sys
 from pathlib import Path
 from typing import TextIO
 
+from releaseguard_agent.agents import (
+    ReleaseDecisionAdviceResult,
+    ReleaseDecisionAgent,
+    ReleaseDecisionExplainer,
+    ReleaseDecisionWorkflowResult,
+    get_default_rule_index_path,
+    write_advice_artifacts,
+)
 from releaseguard_agent.core.default_checkers import (
     build_default_python_runner,
     get_default_python_checker_names,
@@ -58,6 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Write release_report.md and check_result.json "
             "to this directory."
+        ),
+    )
+    check_parser.add_argument(
+        "--agent-advice-output-dir",
+        default=None,
+        help=(
+            "Write release_decision_advice.md and "
+            "release_decision_advice.json to this directory."
         ),
     )
     check_parser.set_defaults(handler=run_check_command)
@@ -115,6 +131,27 @@ def run_check_command(args: argparse.Namespace) -> int:
             )
             return EXIT_USAGE_ERROR
 
+    if args.agent_advice_output_dir is not None:
+        agent_advice_output_dir = (
+            Path(args.agent_advice_output_dir).expanduser().resolve()
+        )
+
+        try:
+            advice_result = build_agent_advice_result(
+                project_path=project_path,
+                results=results,
+            )
+            write_advice_artifacts(
+                output_dir=agent_advice_output_dir,
+                advice_result=advice_result,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            _print_error(
+                "Could not write Agent advice artifacts to "
+                f"{agent_advice_output_dir}: {exc}"
+            )
+            return EXIT_USAGE_ERROR
+
     if args.output_format == "json":
         print(json.dumps(payload, indent=2))
     else:
@@ -166,6 +203,29 @@ def build_result_summary(results: list[CheckResult]) -> dict[str, object]:
         "status_counts": status_counts,
         "risk_counts": risk_counts,
     }
+
+
+def build_agent_advice_result(
+    *,
+    project_path: Path,
+    results: list[CheckResult],
+) -> ReleaseDecisionAdviceResult:
+    """Build Agent advice from already computed checker results."""
+    check_results = tuple(results)
+    agent = ReleaseDecisionAgent.from_rule_index(
+        get_default_rule_index_path()
+    )
+    decision = agent.decide(check_results)
+    explanation = ReleaseDecisionExplainer().explain(decision)
+
+    return ReleaseDecisionAdviceResult(
+        workflow_result=ReleaseDecisionWorkflowResult(
+            project_path=project_path,
+            check_results=check_results,
+            decision=decision,
+        ),
+        explanation=explanation,
+    )
 
 
 def format_text_report(

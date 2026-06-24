@@ -13,6 +13,7 @@ def run_releaseguard(
     output_dir: Path,
     *,
     skip_pytest_execution: bool = False,
+    agent_advice_output_dir: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     source_path = str(PROJECT_ROOT / "src")
@@ -39,6 +40,14 @@ def run_releaseguard(
 
     if skip_pytest_execution:
         command.append("--skip-pytest-execution")
+
+    if agent_advice_output_dir is not None:
+        command.extend(
+            [
+                "--agent-advice-output-dir",
+                str(agent_advice_output_dir),
+            ]
+        )
 
     return subprocess.run(
         command,
@@ -82,6 +91,55 @@ def test_clean_python_project_passes_end_to_end(tmp_path):
     assert "# ReleaseGuard Report" in markdown
     assert "RG-TEST-005" in markdown
     assert "Pytest run succeeded" in markdown
+
+
+def test_clean_python_project_writes_agent_advice_artifacts_end_to_end(
+    tmp_path,
+):
+    output_dir = tmp_path / "clean-report"
+    advice_output_dir = tmp_path / "clean-agent-advice"
+
+    completed = run_releaseguard(
+        "clean_python_project",
+        output_dir,
+        agent_advice_output_dir=advice_output_dir,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+    terminal_payload = json.loads(completed.stdout)
+    file_payload = load_file_payload(output_dir)
+    advice_payload = json.loads(
+        (
+            advice_output_dir / "release_decision_advice.json"
+        ).read_text(encoding="utf-8")
+    )
+    report_markdown = (output_dir / "release_report.md").read_text(
+        encoding="utf-8"
+    )
+    advice_markdown = (
+        advice_output_dir / "release_decision_advice.md"
+    ).read_text(encoding="utf-8")
+
+    assert terminal_payload == file_payload
+
+    assert "# ReleaseGuard Report" in report_markdown
+    assert "# ReleaseGuard Agent Advice" in advice_markdown
+
+    assert advice_payload["tool"] == "releaseguard-agent"
+    assert advice_payload["artifact_type"] == "release-decision-advice"
+    assert advice_payload["project_path"] == str(
+        SAMPLE_PROJECTS / "clean_python_project"
+    )
+    assert advice_payload["workflow_result"]["decision"]["status"] == "ready"
+    assert advice_payload["workflow_result"]["decision"][
+        "release_allowed"
+    ] is True
+    assert advice_payload["explanation"]["status"] == "ready"
+    assert advice_payload["explanation"]["release_allowed"] is True
+    assert advice_payload["explanation"]["markdown"].startswith(
+        "# Release Decision"
+    )
 
 
 def test_failed_tests_project_blocks_release_end_to_end(tmp_path):

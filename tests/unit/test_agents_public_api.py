@@ -1,0 +1,73 @@
+from releaseguard_agent import agents
+from releaseguard_agent.agents import (
+    ADVICE_SCHEMA_VERSION,
+    ReleaseDecision,
+    ReleaseDecisionAdviceArtifacts,
+    ReleaseDecisionAdviceResult,
+    ReleaseDecisionAdviceService,
+    ReleaseDecisionAdviceServiceResult,
+    ReleaseDecisionAdvisor,
+    ReleaseDecisionAgent,
+    ReleaseDecisionExplainer,
+    ReleaseDecisionExplanation,
+    ReleaseDecisionFinding,
+    ReleaseDecisionStatus,
+    ReleaseDecisionSynthesizer,
+    ReleaseDecisionWorkflow,
+    ReleaseDecisionWorkflowResult,
+    build_advice_payload,
+    get_default_rule_index_path,
+    render_advice_markdown,
+    write_advice_artifacts,
+)
+
+
+EXPECTED_PUBLIC_API = {
+    "ADVICE_SCHEMA_VERSION",
+    "ReleaseDecision",
+    "ReleaseDecisionAdviceArtifacts",
+    "ReleaseDecisionAdviceResult",
+    "ReleaseDecisionAdviceService",
+    "ReleaseDecisionAdviceServiceResult",
+    "ReleaseDecisionAdvisor",
+    "ReleaseDecisionAgent",
+    "ReleaseDecisionExplainer",
+    "ReleaseDecisionExplanation",
+    "ReleaseDecisionFinding",
+    "ReleaseDecisionStatus",
+    "ReleaseDecisionSynthesizer",
+    "ReleaseDecisionWorkflow",
+    "ReleaseDecisionWorkflowResult",
+    "build_advice_payload",
+    "get_default_rule_index_path",
+    "render_advice_markdown",
+    "write_advice_artifacts",
+}
+
+
+def test_agents_public_api_exports_expected_names() -> None:
+    assert set(agents.__all__) == EXPECTED_PUBLIC_API
+
+
+def test_agents_public_api_imports_representative_types() -> None:
+    assert ADVICE_SCHEMA_VERSION == "1.0"
+    assert ReleaseDecisionStatus.READY.value == "ready"
+
+    assert callable(ReleaseDecision)
+    assert callable(ReleaseDecisionAdviceArtifacts)
+    assert callable(ReleaseDecisionAdviceResult)
+    assert callable(ReleaseDecisionAdviceService)
+    assert callable(ReleaseDecisionAdviceServiceResult)
+    assert callable(ReleaseDecisionAdvisor)
+    assert callable(ReleaseDecisionAgent)
+    assert callable(ReleaseDecisionExplainer)
+    assert callable(ReleaseDecisionExplanation)
+    assert callable(ReleaseDecisionFinding)
+    assert callable(ReleaseDecisionSynthesizer)
+    assert callable(ReleaseDecisionWorkflow)
+    assert callable(ReleaseDecisionWorkflowResult)
+
+    assert callable(build_advice_payload)
+    assert callable(get_default_rule_index_path)
+    assert callable(render_advice_markdown)
+    assert callable(write_advice_artifacts)

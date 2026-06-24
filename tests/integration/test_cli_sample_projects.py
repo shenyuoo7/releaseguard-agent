@@ -14,6 +14,7 @@ def run_releaseguard(
     *,
     skip_pytest_execution: bool = False,
     agent_advice_output_dir: Path | None = None,
+    trace_output_dir: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     source_path = str(PROJECT_ROOT / "src")
@@ -46,6 +47,14 @@ def run_releaseguard(
             [
                 "--agent-advice-output-dir",
                 str(agent_advice_output_dir),
+            ]
+        )
+
+    if trace_output_dir is not None:
+        command.extend(
+            [
+                "--trace-output-dir",
+                str(trace_output_dir),
             ]
         )
 
@@ -139,6 +148,64 @@ def test_clean_python_project_writes_agent_advice_artifacts_end_to_end(
     assert advice_payload["explanation"]["release_allowed"] is True
     assert advice_payload["explanation"]["markdown"].startswith(
         "# Release Decision"
+    )
+
+
+def test_clean_python_project_writes_trace_artifact_end_to_end(
+    tmp_path,
+):
+    output_dir = tmp_path / "clean-report"
+    advice_output_dir = tmp_path / "clean-agent-advice"
+    trace_output_dir = tmp_path / "clean-trace"
+
+    completed = run_releaseguard(
+        "clean_python_project",
+        output_dir,
+        agent_advice_output_dir=advice_output_dir,
+        trace_output_dir=trace_output_dir,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+    terminal_payload = json.loads(completed.stdout)
+    file_payload = load_file_payload(output_dir)
+    trace_payload = json.loads(
+        (trace_output_dir / "trace.json").read_text(encoding="utf-8")
+    )
+
+    assert terminal_payload == file_payload
+
+    assert (output_dir / "release_report.md").is_file()
+    assert (output_dir / "check_result.json").is_file()
+    assert (advice_output_dir / "release_decision_advice.md").is_file()
+    assert (advice_output_dir / "release_decision_advice.json").is_file()
+    assert (trace_output_dir / "trace.json").is_file()
+
+    assert trace_payload["tool"] == "releaseguard-agent"
+    assert trace_payload["artifact_type"] == "releaseguard_trace"
+    assert trace_payload["schema_version"] == "1.0"
+    assert trace_payload["project_path"] == str(
+        SAMPLE_PROJECTS / "clean_python_project"
+    )
+    assert trace_payload["environment"] == {
+        "include_pytest_execution": True,
+        "output_format": "json",
+    }
+    assert trace_payload["decision"]["status"] == "ready"
+    assert trace_payload["decision"]["release_allowed"] is True
+    assert trace_payload["decision"]["blocking_count"] == 0
+
+    assert trace_payload["outputs"]["release_report"] == str(
+        output_dir.resolve() / "release_report.md"
+    )
+    assert trace_payload["outputs"]["check_result"] == str(
+        output_dir.resolve() / "check_result.json"
+    )
+    assert trace_payload["outputs"]["release_decision_advice_markdown"] == str(
+        advice_output_dir.resolve() / "release_decision_advice.md"
+    )
+    assert trace_payload["outputs"]["release_decision_advice_json"] == str(
+        advice_output_dir.resolve() / "release_decision_advice.json"
     )
 
 

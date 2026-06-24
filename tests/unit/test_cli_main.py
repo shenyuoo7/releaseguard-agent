@@ -191,6 +191,69 @@ def test_check_command_writes_agent_advice_artifacts(
     assert advice_payload["explanation"]["status"] == "ready"
 
 
+def test_check_command_writes_trace_artifact(
+    tmp_path,
+    capsys,
+):
+    create_release_ready_project(tmp_path)
+    report_output_dir = tmp_path / "reports"
+    advice_output_dir = tmp_path / "agent-advice"
+    trace_output_dir = tmp_path / "traces"
+
+    exit_code = main(
+        [
+            "check",
+            str(tmp_path),
+            "--skip-pytest-execution",
+            "--format",
+            "json",
+            "--output-dir",
+            str(report_output_dir),
+            "--agent-advice-output-dir",
+            str(advice_output_dir),
+            "--trace-output-dir",
+            str(trace_output_dir),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    terminal_payload = json.loads(captured.out)
+
+    trace_path = trace_output_dir / "trace.json"
+    trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+
+    assert exit_code == EXIT_SUCCESS
+    assert captured.err == ""
+    assert trace_path.is_file()
+
+    assert terminal_payload["summary"]["blocking"] == 0
+
+    assert trace_payload["tool"] == "releaseguard-agent"
+    assert trace_payload["artifact_type"] == "releaseguard_trace"
+    assert trace_payload["schema_version"] == "1.0"
+    assert trace_payload["project_path"] == str(tmp_path.resolve())
+    assert trace_payload["environment"] == {
+        "include_pytest_execution": False,
+        "output_format": "json",
+    }
+    assert trace_payload["decision"]["status"] == "ready"
+    assert trace_payload["decision"]["release_allowed"] is True
+    assert trace_payload["decision"]["blocking_count"] == 0
+
+    assert trace_payload["outputs"]["release_report"] == str(
+        report_output_dir.resolve() / "release_report.md"
+    )
+    assert trace_payload["outputs"]["check_result"] == str(
+        report_output_dir.resolve() / "check_result.json"
+    )
+    assert trace_payload["outputs"]["release_decision_advice_markdown"] == str(
+        advice_output_dir.resolve() / "release_decision_advice.md"
+    )
+    assert trace_payload["outputs"]["release_decision_advice_json"] == str(
+        advice_output_dir.resolve() / "release_decision_advice.json"
+    )
+
+
 def test_check_command_agent_advice_reuses_existing_results(
     tmp_path,
     monkeypatch,
@@ -314,6 +377,36 @@ def test_check_command_returns_usage_error_when_agent_advice_output_path_is_file
     assert exit_code == EXIT_USAGE_ERROR
     assert captured.out == ""
     assert "Could not write Agent advice artifacts" in captured.err
+    assert str(output_path.resolve()) in captured.err
+
+
+def test_check_command_returns_usage_error_when_trace_output_path_is_file(
+    tmp_path,
+    capsys,
+):
+    create_release_ready_project(tmp_path)
+
+    output_path = tmp_path / "trace-target"
+    output_path.write_text(
+        "This is a file, not a directory.\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "check",
+            str(tmp_path),
+            "--skip-pytest-execution",
+            "--trace-output-dir",
+            str(output_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == EXIT_USAGE_ERROR
+    assert captured.out == ""
+    assert "Could not write trace artifact" in captured.err
     assert str(output_path.resolve()) in captured.err
 
 

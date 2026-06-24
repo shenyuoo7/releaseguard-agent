@@ -1,10 +1,12 @@
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TextIO
 
 from releaseguard_agent.agents import (
+    ReleaseDecisionAdviceArtifacts,
     ReleaseDecisionAdviceResult,
     ReleaseDecisionAgent,
     ReleaseDecisionExplainer,
@@ -21,7 +23,12 @@ from releaseguard_agent.models.check_result import (
     CheckStatus,
     RiskLevel,
 )
+from releaseguard_agent.observability import (
+    build_trace_payload,
+    write_trace_artifact,
+)
 from releaseguard_agent.reports.report_writer import (
+    ReportArtifacts,
     build_report_payload,
     write_report_artifacts,
 )
@@ -76,6 +83,11 @@ def build_parser() -> argparse.ArgumentParser:
             "release_decision_advice.json to this directory."
         ),
     )
+    check_parser.add_argument(
+        "--trace-output-dir",
+        default=None,
+        help="Write trace.json to this directory.",
+    )
     check_parser.set_defaults(handler=run_check_command)
 
     list_parser = subparsers.add_parser(
@@ -117,11 +129,15 @@ def run_check_command(args: argparse.Namespace) -> int:
         summary=summary,
     )
 
+    report_artifacts = None
+    advice_artifacts = None
+    advice_result = None
+
     if args.output_dir is not None:
         output_dir = Path(args.output_dir).expanduser().resolve()
 
         try:
-            write_report_artifacts(
+            report_artifacts = write_report_artifacts(
                 output_dir=output_dir,
                 payload=payload,
             )
@@ -141,7 +157,7 @@ def run_check_command(args: argparse.Namespace) -> int:
                 project_path=project_path,
                 results=results,
             )
-            write_advice_artifacts(
+            advice_artifacts = write_advice_artifacts(
                 output_dir=agent_advice_output_dir,
                 advice_result=advice_result,
             )
@@ -149,6 +165,29 @@ def run_check_command(args: argparse.Namespace) -> int:
             _print_error(
                 "Could not write Agent advice artifacts to "
                 f"{agent_advice_output_dir}: {exc}"
+            )
+            return EXIT_USAGE_ERROR
+
+    if args.trace_output_dir is not None:
+        trace_output_dir = Path(args.trace_output_dir).expanduser().resolve()
+
+        try:
+            trace_payload = build_cli_trace_payload(
+                args=args,
+                project_path=project_path,
+                include_pytest_execution=include_pytest_execution,
+                summary=summary,
+                report_artifacts=report_artifacts,
+                advice_artifacts=advice_artifacts,
+                advice_result=advice_result,
+            )
+            write_trace_artifact(
+                output_dir=trace_output_dir,
+                payload=trace_payload,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            _print_error(
+                f"Could not write trace artifact to {trace_output_dir}: {exc}"
             )
             return EXIT_USAGE_ERROR
 
@@ -225,6 +264,136 @@ def build_agent_advice_result(
             decision=decision,
         ),
         explanation=explanation,
+    )
+
+
+def build_cli_trace_payload(
+    *,
+    args: argparse.Namespace,
+    project_path: Path,
+    include_pytest_execution: bool,
+    summary: dict[str, object],
+    report_artifacts: ReportArtifacts | None,
+    advice_artifacts: ReleaseDecisionAdviceArtifacts | None,
+    advice_result: ReleaseDecisionAdviceResult | None,
+) -> dict[str, object]:
+    created_at = _utc_now_iso()
+
+    return build_trace_payload(
+        run_id=f"releaseguard-check-{created_at}",
+        created_at=created_at,
+        project_path=project_path,
+        command_args=_build_check_trace_command_args(args),
+        environment_summary={
+            "include_pytest_execution": include_pytest_execution,
+            "output_format": args.output_format,
+        },
+        input_artifacts={
+            "rule_index": get_default_rule_index_path(),
+        },
+        output_artifacts=_build_trace_output_artifacts(
+            report_artifacts=report_artifacts,
+            advice_artifacts=advice_artifacts,
+        ),
+        decision_summary=_build_trace_decision_summary(
+            summary=summary,
+            advice_result=advice_result,
+        ),
+    )
+
+
+def _build_check_trace_command_args(
+    args: argparse.Namespace,
+) -> list[str]:
+    command_args = [
+        "check",
+        str(args.project_path),
+    ]
+
+    if args.skip_pytest_execution:
+        command_args.append("--skip-pytest-execution")
+
+    if args.output_format != "text":
+        command_args.extend(["--format", args.output_format])
+
+    if args.output_dir is not None:
+        command_args.extend(["--output-dir", str(args.output_dir)])
+
+    if args.agent_advice_output_dir is not None:
+        command_args.extend(
+            [
+                "--agent-advice-output-dir",
+                str(args.agent_advice_output_dir),
+            ]
+        )
+
+    if args.trace_output_dir is not None:
+        command_args.extend(
+            [
+                "--trace-output-dir",
+                str(args.trace_output_dir),
+            ]
+        )
+
+    return command_args
+
+
+def _build_trace_output_artifacts(
+    *,
+    report_artifacts: ReportArtifacts | None,
+    advice_artifacts: ReleaseDecisionAdviceArtifacts | None,
+) -> dict[str, str]:
+    artifacts: dict[str, str] = {}
+
+    if report_artifacts is not None:
+        artifacts["release_report"] = str(report_artifacts.markdown_path)
+        artifacts["check_result"] = str(report_artifacts.json_path)
+
+    if advice_artifacts is not None:
+        artifacts["release_decision_advice_markdown"] = str(
+            advice_artifacts.markdown_path
+        )
+        artifacts["release_decision_advice_json"] = str(
+            advice_artifacts.json_path
+        )
+
+    return artifacts
+
+
+def _build_trace_decision_summary(
+    *,
+    summary: dict[str, object],
+    advice_result: ReleaseDecisionAdviceResult | None,
+) -> dict[str, object]:
+    blocking_count = int(summary["blocking"])
+    decision_summary: dict[str, object] = {
+        "status": "blocked" if blocking_count > 0 else "ready",
+        "release_allowed": blocking_count == 0,
+        "blocking_count": blocking_count,
+    }
+
+    if advice_result is not None:
+        decision = advice_result.workflow_result.decision
+        decision_summary.update(
+            {
+                "status": decision.status.value,
+                "release_allowed": decision.release_allowed,
+                "blocking_rule_ids": list(decision.blocking_rule_ids),
+                "warning_rule_ids": list(decision.warning_rule_ids),
+                "missing_rule_evidence_count": (
+                    decision.missing_rule_evidence_count
+                ),
+            }
+        )
+
+    return decision_summary
+
+
+def _utc_now_iso() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
     )
 
 

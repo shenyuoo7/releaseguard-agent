@@ -2,6 +2,33 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class RuleSourceEvidence:
+    """Source-document evidence for one release rule."""
+
+    rule_id: str
+    source_title: str
+    source_url: str
+    source_type: str
+    rule_text: str
+    rationale: str
+    knowledge_file: str
+    line_number: int
+
+    def to_dict(self) -> dict[str, object]:
+        """Convert the source evidence to a plain dictionary."""
+        return {
+            "rule_id": self.rule_id,
+            "source_title": self.source_title,
+            "source_url": self.source_url,
+            "source_type": self.source_type,
+            "rule_text": self.rule_text,
+            "rationale": self.rationale,
+            "knowledge_file": self.knowledge_file,
+            "line_number": self.line_number,
+        }
+
+
+@dataclass(frozen=True)
 class RuleEvidence:
     """Structured evidence loaded from the release rule index."""
 
@@ -16,6 +43,7 @@ class RuleEvidence:
     phase: str
     knowledge_file: str
     line_number: int
+    source_documents: tuple[RuleSourceEvidence, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         """Convert the rule evidence to a plain dictionary."""
@@ -31,4 +59,8 @@ class RuleEvidence:
             "phase": self.phase,
             "knowledge_file": self.knowledge_file,
             "line_number": self.line_number,
+            "source_documents": [
+                document.to_dict()
+                for document in self.source_documents
+            ],
         }

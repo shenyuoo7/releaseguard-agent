@@ -26,6 +26,13 @@ SEPARATOR = (
     "|---|---|---|---|---|---|---|---|---|"
 )
 
+SOURCE_HEADER = (
+    "| rule_id | ReleaseGuard rule | support_level | blocking_policy | "
+    "evidence_type | boundary |"
+)
+
+SOURCE_SEPARATOR = "|---|---|---|---|---|---|"
+
 
 def _rule_row(
     rule_id: str = "RG-TEST-001",
@@ -42,6 +49,37 @@ def _index_text(*rows: str) -> str:
     return "\n".join((HEADER, SEPARATOR, *rows)) + "\n"
 
 
+def _source_mapping_text(*, include_url: bool = True) -> str:
+    metadata = (
+        "# Test Source\n\n"
+        "## Source\n\n"
+    )
+
+    if include_url:
+        metadata += "- URL: https://example.com/test-source\n"
+
+    metadata += (
+        "- Type: test source\n\n"
+        "## ReleaseGuard Rule Mapping\n\n"
+    )
+
+    return (
+        metadata
+        + "\n".join(
+            (
+                SOURCE_HEADER,
+                SOURCE_SEPARATOR,
+                (
+                    "| RG-TEST-001 | Check tests directory | "
+                    "source-backed | block | directory_exists | "
+                    "Example rationale. |"
+                ),
+            )
+        )
+        + "\n"
+    )
+
+
 def test_loads_current_project_rule_index() -> None:
     retriever = RuleIndexRetriever.from_file(RULE_INDEX_PATH)
 
@@ -55,7 +93,37 @@ def test_loads_current_project_rule_index() -> None:
     assert record.blocking_policy == "block"
     assert record.knowledge_file == str(RULE_INDEX_PATH)
     assert record.line_number > 0
+    assert len(record.source_documents) == 1
+
+    source_document = record.source_documents[0]
+
+    assert source_document.source_title == "Dockerfile Reference"
+    assert source_document.source_url == (
+        "https://docs.docker.com/reference/dockerfile/"
+    )
+    assert Path(source_document.knowledge_file).name == (
+        "dockerfile_reference.md"
+    )
+    assert source_document.line_number > 0
+    assert "parser directives" in source_document.rationale
     assert record.to_dict()["rule_id"] == "RG-DOCKER-003"
+    assert record.to_dict()["source_documents"][0]["source_url"] == (
+        "https://docs.docker.com/reference/dockerfile/"
+    )
+
+
+def test_loads_multiple_source_documents_for_one_rule() -> None:
+    retriever = RuleIndexRetriever.from_file(RULE_INDEX_PATH)
+
+    record = retriever.require("RG-SEC-002")
+    source_titles = {
+        source_document.source_title
+        for source_document in record.source_documents
+    }
+
+    assert "Flask Debugging" in source_titles
+    assert "Flask Quickstart" in source_titles
+    assert len(record.source_documents) >= 2
 
 
 def test_get_returns_none_for_unknown_rule() -> None:
@@ -86,6 +154,27 @@ def test_loader_accepts_utf8_bom(tmp_path: Path) -> None:
     assert retriever.require("RG-TEST-001").rule_name == (
         "Tests directory exists"
     )
+    assert retriever.require("RG-TEST-001").source_documents == ()
+
+
+def test_source_mapping_requires_source_url(tmp_path: Path) -> None:
+    index_path = tmp_path / "rule_index.md"
+    source_directory = tmp_path / "sources"
+    source_directory.mkdir()
+    index_path.write_text(
+        _index_text(_rule_row()),
+        encoding="utf-8",
+    )
+    (source_directory / "test_source.md").write_text(
+        _source_mapping_text(include_url=False),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        RuleIndexFormatError,
+        match="missing a source URL",
+    ):
+        RuleIndexRetriever.from_file(index_path)
 
 
 def test_duplicate_rule_ids_raise_format_error(

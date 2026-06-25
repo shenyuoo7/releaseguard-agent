@@ -1,5 +1,175 @@
 # ReleaseGuard Agent
 
-ReleaseGuard Agent is an AI Agent system for pre-release review of software projects.
+ReleaseGuard Agent is an AI Agent system for pre-release review of software
+projects.
 
-Phase 1 focuses on Python, FastAPI, and Flask projects. The system will gradually support project detection, release-readiness checks, reports, history, observability, RAG-based rule evidence, and Agent workflows.
+It scans a project before release, runs deterministic release-readiness checks,
+enriches findings with rule evidence, and writes human-readable and
+machine-readable artifacts for review.
+
+Phase 1 focuses on Python projects, including:
+
+- `python-generic`
+- `fastapi`
+- `flask`
+
+The current implementation is CLI-first and keeps space for a future API
+service.
+
+## What it checks today
+
+ReleaseGuard Agent currently includes checks for:
+
+- Python dependency declarations
+- `.env.example` presence
+- Test directory structure
+- Pytest configuration
+- Optional pytest execution
+- FastAPI project signals
+- Flask project signals
+- Dockerfile readiness
+- Dockerfile style
+- Rule evidence enrichment
+- Deterministic release decision advice
+- Trace artifact output for observability
+
+## Generated artifacts
+
+A full CLI run can generate the following files:
+
+| Artifact | Purpose |
+| --- | --- |
+| `release_report.md` | Human-readable release readiness report. |
+| `check_result.json` | Machine-readable raw check results and summary. |
+| `release_checklist.md` | Operator checklist grouped by blockers, warnings, passed checks, and skipped checks. |
+| `release_decision_advice.md` | Human-readable deterministic release decision advice. |
+| `release_decision_advice.json` | Machine-readable release decision advice payload. |
+| `trace.json` | Observability trace for the CLI run, including inputs, outputs, environment summary, and decision summary. |
+
+## Quick start
+
+From the repository root:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main check sample_projects\clean_python_project --format json --output-dir outputs\demo-report --checklist-output-dir outputs\demo-checklist --agent-advice-output-dir outputs\demo-advice --trace-output-dir outputs\demo-trace
+```
+
+This command runs ReleaseGuard against the clean Python sample project and
+writes all supported artifacts.
+
+Expected output directories:
+
+```text
+outputs/
+├── demo-report/
+│   ├── release_report.md
+│   └── check_result.json
+├── demo-checklist/
+│   └── release_checklist.md
+├── demo-advice/
+│   ├── release_decision_advice.md
+│   └── release_decision_advice.json
+└── demo-trace/
+    └── trace.json
+```
+
+## Common CLI commands
+
+Run checks with text output:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main check sample_projects\clean_python_project
+```
+
+Run checks with JSON output:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main check sample_projects\clean_python_project --format json
+```
+
+Skip dynamic pytest execution:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main check sample_projects\clean_python_project --skip-pytest-execution
+```
+
+Write standard report artifacts:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main check sample_projects\clean_python_project --format json --output-dir outputs\demo-report
+```
+
+Write release checklist artifacts:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main check sample_projects\clean_python_project --format json --checklist-output-dir outputs\demo-checklist
+```
+
+Write Agent advice artifacts:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main check sample_projects\clean_python_project --format json --agent-advice-output-dir outputs\demo-advice
+```
+
+Write trace artifacts:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main check sample_projects\clean_python_project --format json --trace-output-dir outputs\demo-trace
+```
+
+List default checkers:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main list-checkers
+```
+
+## Exit codes
+
+| Exit code | Meaning |
+| ---: | --- |
+| `0` | No blocking release issues were found. |
+| `1` | One or more blocking release issues were found. |
+| `2` | Usage error, such as an invalid project path or invalid output path. |
+
+## Development checks
+
+Run the full test suite:
+
+```powershell
+.venv\Scripts\python.exe -m pytest
+```
+
+Run CLI-focused tests:
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests\unit\test_cli_main.py
+```
+
+Run sample-project integration tests:
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests\integration\test_cli_sample_projects.py
+```
+
+Check whitespace issues before committing:
+
+```powershell
+git diff --check
+```
+
+## Documentation
+
+More detailed CLI usage is available in:
+
+```text
+docs/usage/cli.md
+```
+
+## Current project status
+
+The project currently has a working CLI path for Python/FastAPI/Flask
+release-readiness review, deterministic rule evidence enrichment, release
+decision advice, report artifacts, checklist artifacts, and trace artifacts.
+
+Future phases may add an API service, history storage, additional ecosystems,
+richer rule retrieval, and more output formats.

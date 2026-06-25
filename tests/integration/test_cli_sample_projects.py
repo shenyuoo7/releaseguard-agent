@@ -13,6 +13,7 @@ def run_releaseguard(
     output_dir: Path,
     *,
     skip_pytest_execution: bool = False,
+    checklist_output_dir: Path | None = None,
     agent_advice_output_dir: Path | None = None,
     trace_output_dir: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -41,6 +42,14 @@ def run_releaseguard(
 
     if skip_pytest_execution:
         command.append("--skip-pytest-execution")
+
+    if checklist_output_dir is not None:
+        command.extend(
+            [
+                "--checklist-output-dir",
+                str(checklist_output_dir),
+            ]
+        )
 
     if agent_advice_output_dir is not None:
         command.extend(
@@ -155,12 +164,14 @@ def test_clean_python_project_writes_trace_artifact_end_to_end(
     tmp_path,
 ):
     output_dir = tmp_path / "clean-report"
+    checklist_output_dir = tmp_path / "clean-checklist"
     advice_output_dir = tmp_path / "clean-agent-advice"
     trace_output_dir = tmp_path / "clean-trace"
 
     completed = run_releaseguard(
         "clean_python_project",
         output_dir,
+        checklist_output_dir=checklist_output_dir,
         agent_advice_output_dir=advice_output_dir,
         trace_output_dir=trace_output_dir,
     )
@@ -169,6 +180,9 @@ def test_clean_python_project_writes_trace_artifact_end_to_end(
 
     terminal_payload = json.loads(completed.stdout)
     file_payload = load_file_payload(output_dir)
+    checklist_markdown = (
+        checklist_output_dir / "release_checklist.md"
+    ).read_text(encoding="utf-8")
     trace_payload = json.loads(
         (trace_output_dir / "trace.json").read_text(encoding="utf-8")
     )
@@ -177,9 +191,17 @@ def test_clean_python_project_writes_trace_artifact_end_to_end(
 
     assert (output_dir / "release_report.md").is_file()
     assert (output_dir / "check_result.json").is_file()
+    assert (checklist_output_dir / "release_checklist.md").is_file()
     assert (advice_output_dir / "release_decision_advice.md").is_file()
     assert (advice_output_dir / "release_decision_advice.json").is_file()
     assert (trace_output_dir / "trace.json").is_file()
+
+    assert "# ReleaseGuard Release Checklist" in checklist_markdown
+    assert "## Blocking fixes" in checklist_markdown
+    assert "## Warnings to review" in checklist_markdown
+    assert "## Passed checks" in checklist_markdown
+    assert "## Skipped checks" in checklist_markdown
+    assert "RG-TEST-005" in checklist_markdown
 
     assert trace_payload["tool"] == "releaseguard-agent"
     assert trace_payload["artifact_type"] == "releaseguard_trace"
@@ -200,6 +222,9 @@ def test_clean_python_project_writes_trace_artifact_end_to_end(
     )
     assert trace_payload["outputs"]["check_result"] == str(
         output_dir.resolve() / "check_result.json"
+    )
+    assert trace_payload["outputs"]["release_checklist"] == str(
+        checklist_output_dir.resolve() / "release_checklist.md"
     )
     assert trace_payload["outputs"]["release_decision_advice_markdown"] == str(
         advice_output_dir.resolve() / "release_decision_advice.md"

@@ -149,6 +149,47 @@ def test_check_command_writes_report_artifacts(
     assert terminal_payload == file_payload
 
 
+def test_check_command_writes_release_checklist_artifact(
+    tmp_path,
+    capsys,
+):
+    create_release_ready_project(tmp_path)
+    checklist_output_dir = tmp_path / "release-checklist"
+
+    exit_code = main(
+        [
+            "check",
+            str(tmp_path),
+            "--skip-pytest-execution",
+            "--format",
+            "json",
+            "--checklist-output-dir",
+            str(checklist_output_dir),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    terminal_payload = json.loads(captured.out)
+
+    markdown_path = checklist_output_dir / "release_checklist.md"
+
+    assert exit_code == EXIT_SUCCESS
+    assert captured.err == ""
+
+    assert markdown_path.is_file()
+
+    markdown = markdown_path.read_text(encoding="utf-8")
+
+    assert terminal_payload["summary"]["blocking"] == 0
+    assert "# ReleaseGuard Release Checklist" in markdown
+    assert "## Summary" in markdown
+    assert "## Blocking fixes" in markdown
+    assert "## Warnings to review" in markdown
+    assert "## Passed checks" in markdown
+    assert "## Skipped checks" in markdown
+    assert "RG-DEPS-001" in markdown
+
+
 def test_check_command_writes_agent_advice_artifacts(
     tmp_path,
     capsys,
@@ -197,6 +238,7 @@ def test_check_command_writes_trace_artifact(
 ):
     create_release_ready_project(tmp_path)
     report_output_dir = tmp_path / "reports"
+    checklist_output_dir = tmp_path / "release-checklist"
     advice_output_dir = tmp_path / "agent-advice"
     trace_output_dir = tmp_path / "traces"
 
@@ -209,6 +251,8 @@ def test_check_command_writes_trace_artifact(
             "json",
             "--output-dir",
             str(report_output_dir),
+            "--checklist-output-dir",
+            str(checklist_output_dir),
             "--agent-advice-output-dir",
             str(advice_output_dir),
             "--trace-output-dir",
@@ -245,6 +289,9 @@ def test_check_command_writes_trace_artifact(
     )
     assert trace_payload["outputs"]["check_result"] == str(
         report_output_dir.resolve() / "check_result.json"
+    )
+    assert trace_payload["outputs"]["release_checklist"] == str(
+        checklist_output_dir.resolve() / "release_checklist.md"
     )
     assert trace_payload["outputs"]["release_decision_advice_markdown"] == str(
         advice_output_dir.resolve() / "release_decision_advice.md"
@@ -347,6 +394,36 @@ def test_check_command_returns_usage_error_when_output_path_is_file(
     assert exit_code == EXIT_USAGE_ERROR
     assert captured.out == ""
     assert "Could not write report artifacts" in captured.err
+    assert str(output_path.resolve()) in captured.err
+
+
+def test_check_command_returns_usage_error_when_checklist_output_path_is_file(
+    tmp_path,
+    capsys,
+):
+    create_release_ready_project(tmp_path)
+
+    output_path = tmp_path / "checklist-target"
+    output_path.write_text(
+        "This is a file, not a directory.\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "check",
+            str(tmp_path),
+            "--skip-pytest-execution",
+            "--checklist-output-dir",
+            str(output_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == EXIT_USAGE_ERROR
+    assert captured.out == ""
+    assert "Could not write release checklist artifact" in captured.err
     assert str(output_path.resolve()) in captured.err
 
 

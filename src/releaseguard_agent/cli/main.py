@@ -27,9 +27,12 @@ from releaseguard_agent.observability import (
     build_trace_payload,
     write_trace_artifact,
 )
-from releaseguard_agent.reports.report_writer import (
+from releaseguard_agent.reports import (
+    ReleaseChecklistArtifacts,
     ReportArtifacts,
+    build_release_checklist_payload,
     build_report_payload,
+    write_release_checklist_artifact,
     write_report_artifacts,
 )
 
@@ -74,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Write release_report.md and check_result.json "
             "to this directory."
         ),
+    )
+    check_parser.add_argument(
+        "--checklist-output-dir",
+        default=None,
+        help="Write release_checklist.md to this directory.",
     )
     check_parser.add_argument(
         "--agent-advice-output-dir",
@@ -130,6 +138,7 @@ def run_check_command(args: argparse.Namespace) -> int:
     )
 
     report_artifacts = None
+    checklist_artifacts = None
     advice_artifacts = None
     advice_result = None
 
@@ -144,6 +153,29 @@ def run_check_command(args: argparse.Namespace) -> int:
         except (OSError, TypeError, ValueError) as exc:
             _print_error(
                 f"Could not write report artifacts to {output_dir}: {exc}"
+            )
+            return EXIT_USAGE_ERROR
+
+    if args.checklist_output_dir is not None:
+        checklist_output_dir = (
+            Path(args.checklist_output_dir).expanduser().resolve()
+        )
+
+        try:
+            checklist_payload = build_release_checklist_payload(
+                project_path=project_path,
+                include_pytest_execution=include_pytest_execution,
+                results=results,
+                summary=summary,
+            )
+            checklist_artifacts = write_release_checklist_artifact(
+                output_dir=checklist_output_dir,
+                payload=checklist_payload,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            _print_error(
+                "Could not write release checklist artifact to "
+                f"{checklist_output_dir}: {exc}"
             )
             return EXIT_USAGE_ERROR
 
@@ -178,6 +210,7 @@ def run_check_command(args: argparse.Namespace) -> int:
                 include_pytest_execution=include_pytest_execution,
                 summary=summary,
                 report_artifacts=report_artifacts,
+                checklist_artifacts=checklist_artifacts,
                 advice_artifacts=advice_artifacts,
                 advice_result=advice_result,
             )
@@ -274,6 +307,7 @@ def build_cli_trace_payload(
     include_pytest_execution: bool,
     summary: dict[str, object],
     report_artifacts: ReportArtifacts | None,
+    checklist_artifacts: ReleaseChecklistArtifacts | None,
     advice_artifacts: ReleaseDecisionAdviceArtifacts | None,
     advice_result: ReleaseDecisionAdviceResult | None,
 ) -> dict[str, object]:
@@ -293,6 +327,7 @@ def build_cli_trace_payload(
         },
         output_artifacts=_build_trace_output_artifacts(
             report_artifacts=report_artifacts,
+            checklist_artifacts=checklist_artifacts,
             advice_artifacts=advice_artifacts,
         ),
         decision_summary=_build_trace_decision_summary(
@@ -319,6 +354,14 @@ def _build_check_trace_command_args(
     if args.output_dir is not None:
         command_args.extend(["--output-dir", str(args.output_dir)])
 
+    if args.checklist_output_dir is not None:
+        command_args.extend(
+            [
+                "--checklist-output-dir",
+                str(args.checklist_output_dir),
+            ]
+        )
+
     if args.agent_advice_output_dir is not None:
         command_args.extend(
             [
@@ -341,6 +384,7 @@ def _build_check_trace_command_args(
 def _build_trace_output_artifacts(
     *,
     report_artifacts: ReportArtifacts | None,
+    checklist_artifacts: ReleaseChecklistArtifacts | None,
     advice_artifacts: ReleaseDecisionAdviceArtifacts | None,
 ) -> dict[str, str]:
     artifacts: dict[str, str] = {}
@@ -348,6 +392,11 @@ def _build_trace_output_artifacts(
     if report_artifacts is not None:
         artifacts["release_report"] = str(report_artifacts.markdown_path)
         artifacts["check_result"] = str(report_artifacts.json_path)
+
+    if checklist_artifacts is not None:
+        artifacts["release_checklist"] = str(
+            checklist_artifacts.markdown_path
+        )
 
     if advice_artifacts is not None:
         artifacts["release_decision_advice_markdown"] = str(

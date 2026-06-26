@@ -3,6 +3,7 @@
 .env
 AGENTS.md
 project_memory/
+docs/architecture/resume-capability-map.md
 __pycache__/
 *.pyc
 .pytest_cache/

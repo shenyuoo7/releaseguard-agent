@@ -23,6 +23,8 @@ from releaseguard_agent.agents import (
     ReleaseRiskAnalysisContext,
     ReleaseRiskAnalysisParseError,
     ReleaseRiskAnalysisResult,
+    ReleaseRiskAnalysisService,
+    ReleaseRiskAnalysisServiceResult,
     build_advice_payload,
     build_release_risk_analysis_payload,
     get_default_rule_index_path,
@@ -58,6 +60,8 @@ EXPECTED_PUBLIC_API = {
     "ReleaseRiskAnalysisContext",
     "ReleaseRiskAnalysisParseError",
     "ReleaseRiskAnalysisResult",
+    "ReleaseRiskAnalysisService",
+    "ReleaseRiskAnalysisServiceResult",
     "build_advice_payload",
     "build_release_risk_analysis_payload",
     "get_default_rule_index_path",
@@ -98,6 +102,8 @@ def test_agents_public_api_imports_representative_types() -> None:
     assert callable(ReleaseRiskAnalysisContext)
     assert callable(ReleaseRiskAnalysisParseError)
     assert callable(ReleaseRiskAnalysisResult)
+    assert callable(ReleaseRiskAnalysisService)
+    assert callable(ReleaseRiskAnalysisServiceResult)
 
     assert callable(build_advice_payload)
     assert callable(build_release_risk_analysis_payload)

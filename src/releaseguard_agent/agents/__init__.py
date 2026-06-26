@@ -39,6 +39,10 @@ from releaseguard_agent.agents.release_risk_analysis_agent import (
     ReleaseRiskAnalysisParseError,
     ReleaseRiskAnalysisResult,
 )
+from releaseguard_agent.agents.release_risk_analysis_service import (
+    ReleaseRiskAnalysisService,
+    ReleaseRiskAnalysisServiceResult,
+)
 from releaseguard_agent.agents.release_risk_analysis_writer import (
     RELEASE_RISK_ANALYSIS_ARTIFACT_SCHEMA_VERSION,
     ReleaseRiskAnalysisArtifacts,
@@ -73,6 +77,8 @@ __all__ = (
     "ReleaseRiskAnalysisContext",
     "ReleaseRiskAnalysisParseError",
     "ReleaseRiskAnalysisResult",
+    "ReleaseRiskAnalysisService",
+    "ReleaseRiskAnalysisServiceResult",
     "build_advice_payload",
     "build_release_risk_analysis_payload",
     "get_default_rule_index_path",

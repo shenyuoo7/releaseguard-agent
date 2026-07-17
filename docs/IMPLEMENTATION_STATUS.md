@@ -1,6 +1,6 @@
 # ReleaseGuard Agent Implementation Status
 
-Last verified: 2026-07-16
+Last verified: 2026-07-17 (M1)
 
 This page is the evidence-backed status of the local repository. A directory,
 class name, roadmap item, or resume keyword is not treated as implemented
@@ -15,9 +15,10 @@ $env:PYTHONPATH = "src"
 .\.venv\Scripts\python.exe -m releaseguard_agent.cli.main
 ```
 
-The CLI runs deterministic checkers, builds `CheckResult` records, applies the
+The CLI delegates its business workflow to `ReleaseReviewService`. The service
+runs deterministic checkers once, builds `CheckResult` records, applies the
 deterministic blocking policy, and can write reports, a release checklist,
-deterministic release advice, and a run-level trace.
+deterministic release advice, and a run-level trace from the same scan.
 
 The repository also contains a provider-neutral LLM protocol,
 `FakeLLMClient`, a standalone `ReleaseRiskAnalysisAgent` and service, and an
@@ -30,6 +31,7 @@ key and must not make an LLM network request.
 | Capability | Status | Current evidence and boundary |
 | --- | --- | --- |
 | Checker execution framework | COMPLETE | `CheckerRunner` executes the registered deterministic checkers and converts checker errors into structured results. |
+| Unified review service | COMPLETE | `ReleaseReviewService.review()` validates the target, runs one checker pass, aggregates results, and coordinates all current artifact writers. The CLI calls this service. |
 | Python release checks | COMPLETE | Dependency, environment example, test structure, pytest configuration, and optional pytest execution checks are registered. |
 | FastAPI and Flask project checks | PARTIAL | Static dependency and AST-based framework signals are checked; this is not a ReleaseGuard FastAPI service. |
 | Docker review | PARTIAL | Dockerfile and Compose intent are inspected statically; ReleaseGuard itself is not containerized. |
@@ -52,6 +54,7 @@ key and must not make an LLM network request.
 
 ```text
 CLI
+-> ReleaseReviewService
 -> default checker composition
 -> CheckerRunner
 -> deterministic CheckResult records
@@ -104,11 +107,22 @@ The four additional passing tests cover explicit falsy SDK injection,
 base-URL/timeout construction, missing-SDK handling, and sanitized SDK request
 errors.
 
+M1 verification added five tests and established lint/type-check commands:
+
+| Suite/check | Result |
+| --- | --- |
+| M1 focused service/CLI/integration selection | 36 passed |
+| `tests/unit` | 268 passed |
+| `tests/integration` | 13 passed |
+| Full suite | 281 passed |
+| Ruff (`src tests`) | Passed |
+| Mypy (`src/releaseguard_agent`) | 57 source files, no issues |
+
 ## Known risks
 
-- The current project `.venv` does not have the newly declared `openai` SDK
-  installed. M0 does not mutate the environment; fake-SDK tests validate the
-  adapter offline.
+- The declared OpenAI SDK is installed in the project `.venv`, but installing
+  the adapter dependency does not mean provider configuration or product
+  integration is complete.
 - No environment-driven provider factory exists, and the adapter is not wired
   into the CLI or `ReleaseRiskAnalysisService`.
 - Real OpenAI-compatible network execution remains unverified and must be
@@ -125,8 +139,8 @@ errors.
 
 | Milestone | Goal | Current state |
 | --- | --- | --- |
-| M0 | Truthful baseline and repository hygiene | Complete locally; awaiting user review |
-| M1 | Unified `ReleaseReviewService` | Not started |
+| M0 | Truthful baseline and repository hygiene | Complete; checkpoint `f0402cb` |
+| M1 | Unified `ReleaseReviewService` | Complete and verified locally |
 | M2 | FastAPI and shared CLI/API use | Not started |
 | M3 | Production OpenAI-compatible provider configuration | Not started |
 | M4 | BM25, vector retrieval, fusion, and reranking | Not started |
@@ -135,8 +149,9 @@ errors.
 | M7 | Execution-level trace and minimum evals | Not started |
 | M8 | Docker, GitHub Actions, documentation, and interview training | Not started |
 
-Every milestone must stop after its own implementation and verification. The
-next milestone starts only after explicit user confirmation.
+Every milestone is independently implemented, verified, reviewed, documented,
+and saved as a local checkpoint. The approved completion run continues to the
+next milestone automatically and never pushes to a remote.
 
 ## Resume claim truth table
 

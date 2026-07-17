@@ -338,7 +338,10 @@ def test_check_command_agent_advice_reuses_existing_results(
         return FakeRunner()
 
     monkeypatch.setattr(
-        "releaseguard_agent.cli.main.build_default_python_runner",
+        (
+            "releaseguard_agent.services.release_review_service."
+            "build_default_python_runner"
+        ),
         fake_build_default_python_runner,
     )
 

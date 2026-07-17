@@ -176,6 +176,8 @@ More detailed documentation is available in:
 The project currently has a working CLI path for Python/FastAPI/Flask
 release-readiness review, deterministic rule evidence enrichment, release
 decision advice, report artifacts, checklist artifacts, and trace artifacts.
+The CLI delegates scanning and artifact orchestration to the shared
+`ReleaseReviewService`; no FastAPI product endpoint exists yet.
 
 The current rule lookup is exact and local; it is not BM25, vector retrieval,
 or hybrid RAG. FastAPI service endpoints, LangGraph, role-based multi-agent

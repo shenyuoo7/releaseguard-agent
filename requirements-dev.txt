@@ -1,2 +1,5 @@
-# Development and test dependencies will be added step by step.
-pytest
+# Reproducible local validation dependencies.
+pytest==9.1.0
+ruff==0.15.22
+mypy==2.3.0
+types-PyYAML==6.0.12.20260518

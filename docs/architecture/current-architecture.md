@@ -44,7 +44,8 @@ from a fresh PowerShell session requires `PYTHONPATH=src`.
 flowchart TD
     User["User runs CLI command"] --> CLI["cli/main.py"]
 
-    CLI --> RunnerFactory["core/default_checkers.py"]
+    CLI --> Service["services/release_review_service.py"]
+    Service --> RunnerFactory["core/default_checkers.py"]
     RunnerFactory --> Runner["core/checker_runner.py"]
 
     Runner --> Checkers["checkers/*"]
@@ -53,16 +54,17 @@ flowchart TD
 
     Checkers --> Results["models/CheckResult"]
 
-    Results --> ReportWriter["reports/report_writer.py"]
-    Results --> ChecklistWriter["reports/release_checklist_writer.py"]
-    Results --> RAG["rag/check_result_enricher.py"]
+    Results --> Service
+    Service --> ReportWriter["reports/report_writer.py"]
+    Service --> ChecklistWriter["reports/release_checklist_writer.py"]
+    Service --> RAG["rag/check_result_enricher.py"]
 
     RAG --> Agent["agents/release_decision_agent.py"]
     Agent --> Synthesizer["agents/release_decision_synthesizer.py"]
     Synthesizer --> Explainer["agents/release_decision_explainer.py"]
     Explainer --> AdviceWriter["agents/release_decision_advice_writer.py"]
 
-    CLI --> TraceWriter["observability/trace_writer.py"]
+    Service --> TraceWriter["observability/trace_writer.py"]
 
     ReportWriter --> ReportArtifacts["release_report.md + check_result.json"]
     ChecklistWriter --> ChecklistArtifact["release_checklist.md"]
@@ -95,7 +97,8 @@ src/releaseguard_agent/
 
 | Module | Responsibility |
 | --- | --- |
-| `cli/` | CLI argument parsing, command execution, artifact wiring, exit-code handling. |
+| `cli/` | CLI argument parsing, presentation, and exit-code mapping. |
+| `services/` | Product-neutral review orchestration shared by current and future entry points. |
 | `core/` | Checker runner orchestration and default checker composition. |
 | `checkers/` | Release-readiness checks for Python, FastAPI, Flask, Docker, env files, and tests. |
 | `scanners/` | Lower-level file scanners used by checkers. |
@@ -117,17 +120,17 @@ A full CLI run follows this flow:
 
 ```text
 1. User runs `releaseguard check`.
-2. CLI resolves and validates the target project path.
-3. CLI builds the default Python checker runner.
-4. Checker runner executes all configured checkers.
+2. CLI calls `ReleaseReviewService.review()`.
+3. The service resolves and validates the target project path and builds the default runner.
+4. Checker runner executes all configured checkers exactly once.
 5. Each checker returns one or more `CheckResult` objects.
-6. CLI builds a summary from the check results.
-7. CLI optionally writes:
+6. The service builds a summary from the check results.
+7. The service optionally writes:
    - release report artifacts
    - release checklist artifacts
    - Agent advice artifacts
    - trace artifacts
-8. CLI prints text or JSON output.
+8. CLI prints the service result as text or JSON.
 9. CLI returns an exit code:
    - 0 if no blocking issues exist
    - 1 if blocking issues exist
@@ -464,14 +467,12 @@ Reserved package:
 src/releaseguard_agent/api/
 ```
 
-Future API endpoints from the project brief:
+Planned synchronous API endpoints from the approved project boundary:
 
 ```text
 GET /health
-POST /api/check
-GET /api/reports/{run_id}
-GET /api/history
-GET /api/rules/search
+POST /reviews
+POST /verifications
 ```
 
 ### Plugin layer
@@ -505,14 +506,16 @@ previous decisions.
 
 ### Services layer
 
-Reserved package:
+Implemented package:
 
 ```text
 src/releaseguard_agent/services/
 ```
 
-Future service-level orchestration may coordinate CLI, API, persistence, Agent
-workflows, and report retrieval.
+`ReleaseReviewService` is the current business boundary. It validates one
+project path, executes one checker pass, aggregates deterministic results, and
+coordinates report, checklist, advice, and trace artifacts. M2 can reuse this
+service from FastAPI without copying CLI business logic.
 
 ## Test strategy
 
@@ -553,6 +556,7 @@ ReleaseGuard Agent currently follows this architecture:
 
 ```text
 CLI
+ -> ReleaseReviewService
  -> default checker runner
  -> deterministic checkers
  -> CheckResult records

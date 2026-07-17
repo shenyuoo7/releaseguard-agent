@@ -1,5 +1,6 @@
 import configparser
 import tomllib
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -191,6 +192,7 @@ class TestStructureChecker(BaseChecker):
             if not search_root.exists() or self._should_ignore_path(search_root):
                 continue
 
+            candidates: Iterable[Path]
             if search_root.is_file():
                 candidates = [search_root]
             else:

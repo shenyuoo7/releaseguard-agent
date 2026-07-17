@@ -1,6 +1,7 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
+from typing import cast
 
 from releaseguard_agent.models.check_result import (
     CheckStatus,
@@ -83,13 +84,13 @@ class ReleaseDecisionSynthesizer:
         release_allowed = not blocking_rule_ids
         status = _determine_status(
             release_allowed=release_allowed,
-            warning_count=summary["warning"],
+            warning_count=cast(int, summary["warning"]),
             missing_rule_evidence_count=missing_rule_evidence_count,
         )
         agent_summary = _build_agent_summary(
             status=status,
-            blocking_count=summary["blocking"],
-            warning_count=summary["warning"],
+            blocking_count=cast(int, summary["blocking"]),
+            warning_count=cast(int, summary["warning"]),
             missing_rule_evidence_count=missing_rule_evidence_count,
         )
 
@@ -138,13 +139,13 @@ def _build_summary(
 def _determine_status(
     *,
     release_allowed: bool,
-    warning_count: object,
+    warning_count: int,
     missing_rule_evidence_count: int,
 ) -> ReleaseDecisionStatus:
     if not release_allowed:
         return ReleaseDecisionStatus.BLOCKED
 
-    if int(warning_count) > 0 or missing_rule_evidence_count > 0:
+    if warning_count > 0 or missing_rule_evidence_count > 0:
         return ReleaseDecisionStatus.REVIEW_RECOMMENDED
 
     return ReleaseDecisionStatus.READY
@@ -153,8 +154,8 @@ def _determine_status(
 def _build_agent_summary(
     *,
     status: ReleaseDecisionStatus,
-    blocking_count: object,
-    warning_count: object,
+    blocking_count: int,
+    warning_count: int,
     missing_rule_evidence_count: int,
 ) -> str:
     if status == ReleaseDecisionStatus.BLOCKED:

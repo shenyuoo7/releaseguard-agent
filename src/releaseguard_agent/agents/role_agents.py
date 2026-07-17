@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from releaseguard_agent.agent_tools import (
@@ -30,7 +31,7 @@ class EvidenceAgentOutput:
 
 
 class EvidenceAgent:
-    """Retrieve and supplement source-backed evidence for blocking findings."""
+    """Retrieve evidence linked to actionable findings or verified strengths."""
 
     def __init__(
         self,
@@ -41,32 +42,62 @@ class EvidenceAgent:
         self._tracer = tracer
 
     def run(self, request: EvidenceAgentInput) -> EvidenceAgentOutput:
+        actionable = [
+            result
+            for result in request.review.check_results
+            if result.status in {CheckStatus.FAILED, CheckStatus.WARNING}
+        ]
+        grounding_results = actionable or [
+            result
+            for result in request.review.check_results
+            if result.status == CheckStatus.PASSED
+        ]
+        relevant_rule_ids = {
+            result.rule_id for result in grounding_results if result.rule_id
+        }
         query = " ".join(
             part
-            for result in request.review.check_results
-            if result.should_block_release
+            for result in grounding_results
             for part in (result.rule_id or "", result.title, result.message)
         )
         if not query.strip():
-            query = (
-                "release readiness dependency tests configuration "
-                "container health production safety"
-            )
+            query = "release readiness"
         initial = self._tool.invoke(
             query,
             mode=request.retrieval_mode,
             top_k=request.top_k,
             tracer=self._tracer,
         )
-        combined = {item.chunk_id: item for item in initial.evidence}
+        combined = {
+            item.chunk_id: item
+            for item in initial.evidence
+            if not relevant_rule_ids or item.rule_id in relevant_rule_ids
+        }
+        supplemental_attempted = False
+        for rule_id in sorted(relevant_rule_ids):
+            if any(item.rule_id == rule_id for item in combined.values()):
+                continue
+            supplemental_attempted = True
+            exact = self._tool.invoke(
+                rule_id,
+                mode="exact",
+                top_k=10,
+                tracer=self._tracer,
+            )
+            combined.update(
+                {
+                    item.chunk_id: item
+                    for item in exact.evidence
+                    if item.rule_id == rule_id
+                }
+            )
         sufficient = _evidence_is_sufficient(
             tuple(combined.values()), request.minimum_evidence
         )
-        supplemental_attempted = False
         if not sufficient:
             supplemental_attempted = True
-            for result in request.review.check_results:
-                if not result.should_block_release or not result.rule_id:
+            for result in grounding_results:
+                if not result.rule_id:
                     continue
                 exact = self._tool.invoke(
                     result.rule_id,
@@ -74,7 +105,13 @@ class EvidenceAgent:
                     top_k=10,
                     tracer=self._tracer,
                 )
-                combined.update({item.chunk_id: item for item in exact.evidence})
+                combined.update(
+                    {
+                        item.chunk_id: item
+                        for item in exact.evidence
+                        if item.rule_id == result.rule_id
+                    }
+                )
             sufficient = _evidence_is_sufficient(
                 tuple(combined.values()), request.minimum_evidence
             )
@@ -154,7 +191,7 @@ class FixPlannerAgentOutput:
 
 
 class FixPlannerAgent:
-    """Create a manual remediation plan and ensure every blocker is covered."""
+    """Create an actionable manual plan for every warning or blocker."""
 
     def __init__(
         self,
@@ -172,10 +209,15 @@ class FixPlannerAgent:
                 tracer=self._tracer,
             )
         )
-        blocking_rule_ids = {
-            result.rule_id
+        actionable_results = [
+            result
             for result in request.review.check_results
-            if result.should_block_release and result.rule_id
+            if result.status in {CheckStatus.FAILED, CheckStatus.WARNING}
+        ]
+        actionable_rule_ids = {
+            result.rule_id
+            for result in actionable_results
+            if result.rule_id
         }
         covered = {
             rule_id
@@ -183,31 +225,35 @@ class FixPlannerAgent:
             for rule_id in step.get("rule_ids", [])
             if isinstance(rule_id, str)
         }
-        for result in request.review.check_results:
+        for result in actionable_results:
             if (
-                not result.should_block_release
-                or not result.rule_id
+                not result.rule_id
                 or result.rule_id in covered
             ):
                 continue
             raw_steps.append(
-                {
-                    "priority": len(raw_steps) + 1,
-                    "title": result.title,
-                    "action": result.recommendation or result.message,
-                    "rule_ids": [result.rule_id],
-                    "validation": (
-                        "Apply the change manually, then run verification."
-                    ),
-                }
+                _fallback_action(
+                    request.review.project_path,
+                    result,
+                    priority=len(raw_steps) + 1,
+                )
             )
             covered.add(result.rule_id)
         evidence_by_rule: dict[str, list[str]] = {}
         for item in request.evidence:
             evidence_by_rule.setdefault(item.rule_id, []).append(item.evidence_id)
+        check_ids_by_rule = {
+            result.rule_id: f"CHECK-{index:03d}-{result.rule_id or 'NO-RULE'}"
+            for index, result in enumerate(request.review.check_results, start=1)
+            if result.rule_id
+        }
         normalized_steps: list[dict[str, Any]] = []
         for step in raw_steps:
-            normalized = dict(step)
+            normalized = _normalize_action(
+                request.review.project_path,
+                actionable_results,
+                step,
+            )
             step_rule_ids = [
                 value
                 for value in normalized.get("rule_ids", [])
@@ -220,13 +266,28 @@ class FixPlannerAgent:
                     for evidence_id in evidence_by_rule.get(rule_id, [])
                 }
             )
+            normalized["related_check_ids"] = list(dict.fromkeys([
+                *[
+                    value
+                    for value in normalized.get("related_check_ids", [])
+                    if isinstance(value, str)
+                ],
+                *[
+                    check_ids_by_rule[rule_id]
+                    for rule_id in step_rule_ids
+                    if rule_id in check_ids_by_rule
+                ],
+            ]))
             normalized_steps.append(normalized)
-        all_evidence_ids = tuple(
-            sorted({item.evidence_id for item in request.evidence})
-        )
+        all_evidence_ids = tuple(sorted({
+            evidence_id
+            for step in normalized_steps
+            for evidence_id in step.get("evidence_ids", [])
+            if isinstance(evidence_id, str)
+        }))
         return FixPlannerAgentOutput(
             steps=tuple(normalized_steps),
-            covered_rule_ids=tuple(sorted(blocking_rule_ids.intersection(covered))),
+            covered_rule_ids=tuple(sorted(actionable_rule_ids.intersection(covered))),
             evidence_ids=all_evidence_ids,
         )
 
@@ -316,4 +377,144 @@ def _issue_ids(review: ReleaseReviewResult) -> set[str]:
         )
         for result in review.check_results
         if result.status in {CheckStatus.FAILED, CheckStatus.WARNING}
+    }
+
+
+def _normalize_action(
+    project_root: Path,
+    actionable_results: list[Any],
+    step: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(step)
+    rule_ids = [
+        value for value in normalized.get("rule_ids", []) if isinstance(value, str)
+    ]
+    related = [result for result in actionable_results if result.rule_id in rule_ids]
+    action_text = str(normalized.get("action") or normalized.get("objective") or "")
+    validation = str(
+        normalized.get("validation")
+        or normalized.get("verification_command")
+        or "重新运行 ReleaseGuard，确认相关检查已通过。"
+    )
+    normalized.setdefault("objective", action_text or "完成相关发布准备修复。")
+    normalized.setdefault("why", "该问题会降低发布过程的可复现性或可维护性。")
+    normalized.setdefault(
+        "steps",
+        [
+            "确认检查结果指出的现象和影响范围。",
+            "在建议文件中手动完成修改，并保留现有业务行为。",
+            "运行验证命令，确认问题消失且没有引入新的失败。",
+        ],
+    )
+    normalized.setdefault("example", "请根据项目现有结构完成等价配置。")
+    normalized.setdefault("verification_command", validation)
+    normalized.setdefault("success_criteria", "相关检查变为已通过，且现有测试保持通过。")
+    normalized.setdefault("related_check_ids", [])
+    normalized["suggested_files"] = _normalize_suggested_files(
+        project_root,
+        rule_ids,
+        normalized.get("suggested_files", []),
+        related,
+    )
+    normalized["action"] = str(normalized["objective"])
+    normalized["validation"] = str(normalized["verification_command"])
+    return normalized
+
+
+def _normalize_suggested_files(
+    project_root: Path,
+    rule_ids: list[str],
+    raw_files: Any,
+    related_results: list[Any],
+) -> list[str]:
+    root = project_root.resolve()
+    candidates = raw_files if isinstance(raw_files, list) else []
+    paths: list[str] = []
+    for value in candidates:
+        if not isinstance(value, str) or not value.strip() or value == "需要人工确认":
+            continue
+        candidate = Path(value.strip())
+        candidate = candidate if candidate.is_absolute() else root / candidate
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError):
+            continue
+        if resolved != root:
+            paths.append(str(resolved))
+    for result in related_results:
+        if not result.file_path:
+            continue
+        candidate = Path(result.file_path).resolve()
+        if candidate != root and candidate.exists():
+            paths.append(str(candidate))
+    if not paths:
+        targets = {
+            "RG-TEST-001": root / "tests",
+            "RG-TEST-006": root / "pytest.ini",
+            "RG-DEPS-001": root / "requirements.txt",
+            "RG-CONFIG-001": root / ".env.example",
+            "RG-DOCKER-001": root / "Dockerfile",
+        }
+        paths.extend(str(targets[rule_id]) for rule_id in rule_ids if rule_id in targets)
+    return list(dict.fromkeys(paths)) or ["需要人工确认"]
+
+
+def _fallback_action(project_root: Path, result: Any, *, priority: int) -> dict[str, Any]:
+    if result.rule_id == "RG-TEST-001":
+        return {
+            "priority": priority,
+            "title": "整理 tests 测试目录",
+            "objective": "把现有测试统一放入项目根目录的 tests/，确保本地和持续集成能够稳定发现。",
+            "why": "测试文件分散会增加漏跑风险，也让新成员难以理解测试边界。",
+            "steps": [
+                "盘点项目中的 test_*.py 和 *_test.py 文件。",
+                "在项目根目录创建 tests/ 并按业务模块组织测试。",
+                "移动现有测试文件并修正导入、夹具和资源路径。",
+                "运行 pytest 收集命令，确认预期测试全部可发现。",
+                "运行完整测试，修复迁移导致的导入或路径问题。",
+            ],
+            "suggested_files": [str(project_root / "tests")],
+            "example": "tests/\n  test_image_api.py\n  test_tasks.py",
+            "verification_command": "python -m pytest --collect-only -q\npython -m pytest -q",
+            "success_criteria": "tests/ 存在，预期测试均被收集，完整测试无新增失败。",
+            "related_check_ids": [],
+            "rule_ids": [result.rule_id],
+        }
+    if result.rule_id == "RG-TEST-006":
+        return {
+            "priority": priority,
+            "title": "增加固定的 Pytest 配置",
+            "objective": "固定测试发现范围和导入行为，减少本地与持续集成环境差异。",
+            "why": "缺少配置时，pytest 可能因启动目录或环境差异收集不同测试。",
+            "steps": [
+                "确认项目当前使用 pytest.ini 还是 pyproject.toml 管理工具配置。",
+                "在项目根目录新增或更新 Pytest 配置。",
+                "设置 testpaths 和 python_files，使发现规则与项目测试命名一致。",
+                "执行收集命令检查测试数量和路径。",
+                "执行完整测试并在持续集成命令中复用相同入口。",
+            ],
+            "suggested_files": [str(project_root / "pytest.ini")],
+            "example": "[pytest]\ntestpaths = tests\npython_files = test_*.py *_test.py\naddopts = -ra",
+            "verification_command": "python -m pytest --collect-only -q\npython -m pytest -q",
+            "success_criteria": "pytest 读取固定配置，收集结果稳定，完整测试无失败。",
+            "related_check_ids": [],
+            "rule_ids": [result.rule_id],
+        }
+    return {
+        "priority": priority,
+        "title": result.title,
+        "objective": result.recommendation or result.message,
+        "why": "该检查已报告警告或阻断，需要在发布前人工确认并处理。",
+        "steps": [
+            "阅读检查事实并确认受影响范围。",
+            "按建议在具体配置或源码文件中手动修复。",
+            "重新运行 ReleaseGuard 和项目测试确认结果。",
+        ],
+        "suggested_files": [],
+        "example": "需要结合项目结构人工确认。",
+        "verification_command": "python -m pytest -q",
+        "success_criteria": "相关检查变为已通过，且没有新增问题。",
+        "related_check_ids": [],
+        "rule_ids": [result.rule_id] if result.rule_id else [],
     }

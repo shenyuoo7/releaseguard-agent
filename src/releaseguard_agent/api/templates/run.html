@@ -13,7 +13,7 @@
       <li data-step="{{ step.key }}" class="{{ step.status }}"><span></span>{{ step.label }}</li>
       {% endfor %}
     </ol>
-    <div id="model-wait" class="model-wait" {% if not record.waiting_for_model %}hidden{% endif %}>正在等待模型响应…</div>
+    <div id="model-wait" class="model-wait" {% if not record.waiting_for_model %}hidden{% endif %}>正在等待真实模型响应…</div>
     <div id="run-error" class="message error" hidden></div>
   </section>
 </section>
@@ -23,16 +23,16 @@
     <div>
       <a class="back-link" href="/">← 选择其他项目</a>
       <h1>{{ result.project.name }}</h1>
-      <p>{{ result.reviewed_at }} · {{ result.mode_label }} · {{ result.duration_seconds }} 秒</p>
+      <p>{{ result.reviewed_at_label }} · {{ result.mode_label }} · 耗时 {{ result.duration_seconds }} 秒</p>
     </div>
-    <div class="decision {% if result.decision.release_allowed %}ready{% else %}blocked{% endif %}">{{ result.decision.label }}</div>
+    <div class="decision {{ result.decision.state }}">{{ result.decision.label }}</div>
   </div>
 
-  <section class="metrics">
-    <div><span>问题总数</span><strong>{{ result.summary.failed + result.summary.warning }}</strong></div>
+  <section class="metrics" aria-label="审查统计">
     <div><span>阻断</span><strong>{{ result.summary.blocking }}</strong></div>
     <div><span>警告</span><strong>{{ result.summary.warning }}</strong></div>
-    <div><span>通过</span><strong>{{ result.summary.passed }}</strong></div>
+    <div><span>未通过</span><strong>{{ result.summary.failed }}</strong></div>
+    <div><span>已通过</span><strong>{{ result.summary.passed }}</strong></div>
   </section>
 
   <section class="ai-banner {% if result.ai.ai_invoked and not result.ai.fallback_used %}success{% elif result.ai.fallback_used %}warning{% else %}offline{% endif %}">
@@ -40,67 +40,159 @@
     {% if result.ai.provider %}<span>{{ result.ai.provider }} · {{ result.ai.model }}{% if result.ai.latency_ms %} · {{ result.ai.latency_ms }} ms{% endif %}</span>{% endif %}
   </section>
 
-  <section class="panel content-section">
-    <h2>AI 风险总结</h2>
-    <p class="summary-text">{{ result.risk_analysis.summary }}</p>
+  <nav class="section-nav" aria-label="报告章节">
+    <a href="#analysis">综合分析</a>
+    <a href="#fix-plan">修复计划</a>
+    <a href="#issues">问题</a>
+    <a href="#evidence">证据</a>
+  </nav>
+
+  <section class="panel content-section" id="analysis">
+    <div class="section-heading"><span class="section-number">1</span><h2>AI 综合分析</h2></div>
+    <h3>总体判断</h3>
+    <div class="summary-text">{{ result.risk_analysis.executive_summary }}</div>
+
+    {% if result.risk_analysis.positive_findings %}
+    <h3>项目做得好的地方</h3>
+    <ul class="positive-list">
+      {% for finding in result.risk_analysis.positive_findings %}<li>{{ finding }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+
+    {% if result.risk_analysis.risk_analysis %}
+    <h3>主要风险</h3>
+    <div class="risk-list">
+      {% for risk in result.risk_analysis.risk_analysis %}
+      <article class="risk-item">
+        <div class="risk-title"><span class="severity severity-{{ risk.severity }}">{{ risk.severity_label }}</span><strong>{{ risk.title }}</strong></div>
+        <p><b>发现：</b>{{ risk.what_was_found or risk.reason }}</p>
+        {% if risk.why_it_matters %}<p><b>重要性：</b>{{ risk.why_it_matters }}</p>{% endif %}
+        {% if risk.possible_impact %}<p><b>可能影响：</b>{{ risk.possible_impact }}</p>{% endif %}
+        {% if risk.evidence_ids %}<p class="tags"><b>相关证据：</b>{% for evidence_id in risk.evidence_ids %}<span>{{ evidence_id }}</span>{% endfor %}</p>{% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <h3>发布建议</h3>
+    <p class="recommendation">{{ result.risk_analysis.release_recommendation }}</p>
+    {% if result.risk_analysis.limitations %}
+    <h3>本次分析边界</h3>
+    <ul>{% for limitation in result.risk_analysis.limitations %}<li>{{ limitation }}</li>{% endfor %}</ul>
+    {% endif %}
+
     {% if result.ai.fallback_used %}
-    <p class="error-text">{{ result.ai.error_message }} 可返回配置页重新测试连接后重试。</p>
-    <a class="button secondary" href="/settings/ai">重新测试连接</a>
-    <button class="button primary rerun-ai" type="button" data-project-path="{{ result.project.path }}">重新执行 AI 审查</button>
+    <div class="message error">
+      <b>{{ result.ai.error_message }}</b> 本页已保留确定性基础扫描结果，但不能视为 AI 分析成功。
+      <div class="inline-actions">
+        <a class="button secondary" href="/settings/ai">重新测试连接</a>
+        <button class="button primary rerun-ai" type="button" data-project-path="{{ result.project.path }}">重新执行 AI 审查</button>
+      </div>
+    </div>
     {% endif %}
   </section>
 
-  <section class="panel content-section">
-    <h2>优先修复计划</h2>
+  <section class="panel content-section" id="fix-plan">
+    <div class="section-heading"><span class="section-number">2</span><h2>优先修复计划</h2></div>
     {% if result.fix_plan %}
       {% for step in result.fix_plan %}
       <article class="fix-item">
         <span class="priority">P{{ step.priority }}</span>
-        <div><h3>{{ step.title }}</h3><p>{{ step.action }}</p>
-        {% if step.evidence_ids %}<p><b>证据：</b>{{ step.evidence_ids | join(', ') }}</p>{% endif %}
-        {% if step.suggested_files %}<p><b>建议文件：</b>{{ step.suggested_files | join(', ') }}</p>{% endif %}
-        <p><b>如何验证：</b>{{ step.validation }}</p></div>
+        <div class="fix-body">
+          <h3>{{ step.title }}</h3>
+          <p><b>修复目标：</b>{{ step.objective or step.action }}</p>
+          <p><b>为什么要修：</b>{{ step.why }}</p>
+          <h4>操作步骤</h4>
+          <ol class="action-steps">{% for action in step.steps %}<li>{{ action }}</li>{% endfor %}</ol>
+          <p><b>建议文件：</b></p>
+          <ul class="path-list">{% for path in step.suggested_files %}<li><code>{{ path }}</code></li>{% endfor %}</ul>
+          {% if step.example %}<h4>示例</h4><pre class="example-block"><code>{{ step.example }}</code></pre>{% endif %}
+          <h4>验证方法</h4>
+          <pre class="command-block"><code>{{ step.verification_command or step.validation }}</code></pre>
+          <p><b>成功标准：</b>{{ step.success_criteria }}</p>
+          {% if step.evidence_ids %}<p class="tags"><b>相关证据：</b>{% for evidence_id in step.evidence_ids %}<span>{{ evidence_id }}</span>{% endfor %}</p>{% endif %}
+        </div>
       </article>
       {% endfor %}
-    {% else %}<p>当前没有阻断修复项。</p>{% endif %}
+    {% else %}<p>当前没有需要执行的修复项，请按发布前验证步骤完成最终确认。</p>{% endif %}
+
+    {% if result.risk_analysis.final_verification_steps %}
+    <div class="verification-box">
+      <h3>修复后的验证顺序</h3>
+      <ol>{% for step in result.risk_analysis.final_verification_steps %}<li>{{ step }}</li>{% endfor %}</ol>
+    </div>
+    {% endif %}
   </section>
 
-  <section class="panel content-section">
-    <h2>确定性检查结果</h2>
-    <div class="check-list">
-      {% for check in result.checks %}
+  <section class="panel content-section" id="issues">
+    <div class="section-heading"><span class="section-number">3</span><h2>需要处理的问题（{{ result.check_groups.actionable | length }}）</h2></div>
+    <div class="section-tools">
+      <button class="text-button" id="expand-all-issues" type="button">展开全部问题</button>
+      <button class="text-button" id="collapse-passed" type="button">收起已通过项</button>
+    </div>
+    <div class="check-list actionable-list">
+      {% for check in result.check_groups.actionable %}
       <article class="check-item status-{{ check.status }}">
-        <span class="check-status">{{ check.status }}</span>
-        <div><h3>{{ check.title }}</h3><p>{{ check.message }}</p>
-        {% if check.recommendation %}<p><b>建议：</b>{{ check.recommendation }}</p>{% endif %}</div>
+        <span class="check-status">{{ check.status_label }}</span>
+        <div>
+          <h3>{{ check.title }}</h3>
+          <p>{{ check.message }}</p>
+          <p><b>严重程度：</b>{{ check.severity_label }}</p>
+          {% if check.recommendation %}<p><b>建议：</b>{{ check.recommendation }}</p>{% endif %}
+          {% if check.rule_id %}<span class="rule-tag">{{ check.rule_id }}</span>{% endif %}
+        </div>
       </article>
-      {% endfor %}
+      {% else %}<p class="success-text">没有阻断、警告或执行错误。</p>{% endfor %}
     </div>
   </section>
 
-  <section class="panel content-section">
-    <h2>规则证据</h2>
+  <details class="panel content-section result-details" id="passed-checks">
+    <summary>已通过检查（{{ result.check_groups.passed | length }}）</summary>
+    <div class="check-list">
+      {% for check in result.check_groups.passed %}
+      <article class="check-item status-passed"><span class="check-status">{{ check.status_label }}</span><div><h3>{{ check.title }}</h3><p>{{ check.message }}</p>{% if check.rule_id %}<span class="rule-tag">{{ check.rule_id }}</span>{% endif %}</div></article>
+      {% endfor %}
+    </div>
+  </details>
+
+  <details class="panel content-section result-details" id="skipped-checks">
+    <summary>不适用或已跳过（{{ result.check_groups.skipped | length }}）</summary>
+    <div class="check-list">
+      {% for check in result.check_groups.skipped %}
+      <article class="check-item status-skipped"><span class="check-status">{{ check.status_label }}</span><div><h3>{{ check.title }}</h3><p>{{ check.message }}</p>{% if check.rule_id %}<span class="rule-tag">{{ check.rule_id }}</span>{% endif %}</div></article>
+      {% endfor %}
+    </div>
+  </details>
+
+  <section class="panel content-section" id="evidence">
+    <div class="section-heading"><span class="section-number">6</span><h2>规则证据</h2></div>
+    <p class="muted">这里只展示被 AI、修复计划或当前问题实际引用的证据。</p>
     {% for evidence in result.evidence %}
     <article class="evidence-item">
-      <div><b>{{ evidence.rule_id }}</b> · {{ evidence.metadata.get('title', '发布规则') }}</div>
-      <p>{{ evidence.text }}</p>
-      {% if evidence.related_findings %}<p><b>关联问题：</b>{{ evidence.related_findings | join(', ') }}</p>{% endif %}
-      <small>Evidence {{ evidence.evidence_id }} · Chunk {{ evidence.chunk_id }}</small>
-      {% if evidence.source_url %}<a href="{{ evidence.source_url }}" target="_blank" rel="noreferrer">查看来源</a>{% endif %}
+      <div class="evidence-heading"><span class="rule-tag">{{ evidence.rule_id }}</span><strong>{{ evidence.title }}</strong></div>
+      <p>{{ evidence.summary_zh }}</p>
+      <p class="tags"><span>{{ evidence.evidence_id }}</span><span>{{ evidence.chunk_id }}</span></p>
+      {% if evidence.source_url %}<a href="{{ evidence.source_url }}" target="_blank" rel="noreferrer">查看规则来源</a>{% endif %}
     </article>
-    {% else %}<p>本次没有可展示的规则证据。</p>{% endfor %}
+    {% else %}<p>本次没有与当前问题或 AI 分析直接关联的规则证据。</p>{% endfor %}
   </section>
 
-  <section class="panel content-section">
-    <h2>执行过程</h2>
-    <div class="route-list">{% for node in result.route_history %}<span>{{ node }}</span>{% endfor %}</div>
-    <details><summary>查看高级执行详情</summary><pre>{{ result.trace | tojson(indent=2) }}</pre></details>
-  </section>
+  <details class="panel content-section result-details advanced-details">
+    <summary>高级执行详情</summary>
+    <h3>工作流执行节点</h3>
+    <ol class="route-list">{% for node in result.route_steps %}<li>{{ node.label }}</li>{% endfor %}</ol>
+    <h3>检索候选</h3>
+    <pre>{{ result.evidence_candidates | tojson(indent=2) }}</pre>
+    <h3>确定性检查技术原文</h3>
+    <pre>{{ result.checks | tojson(indent=2) }}</pre>
+    <h3>原始执行轨迹</h3>
+    <pre>{{ result.trace | tojson(indent=2) }}</pre>
+    <a class="button secondary" href="/runs/{{ run_id }}/download/json">下载 JSON</a>
+  </details>
 
   <div class="result-actions">
     <a class="button primary" href="/">重新审查</a>
     <a class="button secondary" href="/runs/{{ run_id }}/download/markdown">下载完整 Markdown</a>
-    <a class="button secondary" href="/runs/{{ run_id }}/download/json">下载 JSON</a>
     <button class="button ghost" id="open-result-directory" data-run-id="{{ run_id }}" type="button">打开结果目录</button>
   </div>
 </section>

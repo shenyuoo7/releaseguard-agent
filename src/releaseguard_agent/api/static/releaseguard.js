@@ -172,4 +172,16 @@ document.addEventListener("DOMContentLoaded", () => {
       button.disabled = false;
     }
   });
+
+  document.querySelector("#expand-all-issues")?.addEventListener("click", () => {
+    const issues = document.querySelector("#issues");
+    issues?.classList.add("attention");
+    issues?.scrollIntoView({behavior: "smooth", block: "start"});
+    window.setTimeout(() => issues?.classList.remove("attention"), 1000);
+  });
+
+  document.querySelector("#collapse-passed")?.addEventListener("click", () => {
+    const passed = document.querySelector("#passed-checks");
+    if (passed) passed.open = false;
+  });
 });

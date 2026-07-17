@@ -15,6 +15,7 @@ from releaseguard_agent.agents.role_agents import (
     RiskAgent,
     VerifierAgent,
 )
+from releaseguard_agent.agents.release_risk_analysis_agent import ReportDetailLevel
 from releaseguard_agent.llm import LLMRuntime
 from releaseguard_agent.observability import ExecutionTracer
 from releaseguard_agent.rag import RuleRetrievalService, get_default_rule_index_path
@@ -39,6 +40,8 @@ class ReleaseAgentWorkflowService:
         retrieval_service: RuleRetrievalService | None = None,
         llm_runtime: LLMRuntime | None = None,
         tools: ReleaseWorkflowTools | None = None,
+        locale: str = "zh-CN",
+        report_detail_level: ReportDetailLevel = "standard",
     ) -> None:
         self._tools = tools or ReleaseWorkflowTools(
             scan=ScanProjectTool(review_service),
@@ -46,7 +49,11 @@ class ReleaseAgentWorkflowService:
                 retrieval_service
                 or RuleRetrievalService(get_default_rule_index_path())
             ),
-            risk=RiskAnalysisTool(llm_runtime),
+            risk=RiskAnalysisTool(
+                llm_runtime,
+                locale=locale,
+                detail_level=report_detail_level,
+            ),
             fix_plan=FixPlanTool(),
         )
     @property

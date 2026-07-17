@@ -53,7 +53,21 @@ class LLMReviewService:
             model=self._runtime.model,
             temperature=0.0,
         )
-        analysis = agent.analyze(ReleaseRiskAnalysisContext(advice_result=advice))
+        analysis = agent.analyze(
+            ReleaseRiskAnalysisContext(
+                advice_result=advice,
+                retrieval_evidence=review.retrieval_evidence,
+                check_results=tuple(
+                    {
+                        **item.to_dict(),
+                        "check_result_id": (
+                            f"CHECK-{index:03d}-{item.rule_id or 'NO-RULE'}"
+                        ),
+                    }
+                    for index, item in enumerate(review.check_results, start=1)
+                ),
+            )
+        )
         artifacts = write_release_risk_analysis_artifacts(
             output_dir=Path(output_dir).expanduser().resolve(),
             result=analysis,

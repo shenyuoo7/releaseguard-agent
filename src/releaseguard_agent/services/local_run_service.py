@@ -11,6 +11,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from releaseguard_agent.api.report_localization import (
+    SEVERITY_LABELS,
+    decision_view,
+    format_zh_datetime,
+    localize_check,
+    localize_evidence,
+    localize_route,
+)
 from releaseguard_agent.llm import LLMRuntime
 from releaseguard_agent.observability import ExecutionTracer
 from releaseguard_agent.services.agent_workflow_service import (
@@ -351,47 +359,65 @@ def _build_result_payload(
     error_type: str | None,
 ) -> dict[str, Any]:
     finished = time.perf_counter()
-    checks = [item.to_dict() for item in review.check_results]
+    raw_checks = [item.to_dict() for item in review.check_results]
+    checks = [localize_check(item, index) for index, item in enumerate(raw_checks, 1)]
+    actionable_checks = [
+        item for item in checks if item["status"] in {"failed", "warning", "error"}
+    ]
+    passed_checks = [item for item in checks if item["status"] == "passed"]
+    skipped_checks = [item for item in checks if item["status"] == "skipped"]
+    cited_evidence_ids = _referenced_evidence_ids(risk_analysis, fix_plan)
+    actionable_rule_ids = {
+        str(item["rule_id"]) for item in actionable_checks if item.get("rule_id")
+    }
+    evidence_candidates: list[dict[str, Any]] = []
+    displayed_evidence: list[dict[str, Any]] = []
     for item in evidence:
-        item["related_findings"] = [
-            str(check["title"])
-            for check in checks
-            if check.get("rule_id") == item.get("rule_id")
+        related = [
+            check for check in actionable_checks if check.get("rule_id") == item.get("rule_id")
         ]
-    for step in fix_plan:
-        rule_ids = set(step.get("rule_ids", []))
-        related = [item for item in checks if item.get("rule_id") in rule_ids]
-        if "suggested_files" not in step:
-            step["suggested_files"] = sorted(
-                {str(item["file_path"]) for item in related if item.get("file_path")}
-            )
+        localized = localize_evidence(dict(item), related)
+        evidence_candidates.append(localized)
+        if item.get("evidence_id") in cited_evidence_ids or item.get("rule_id") in actionable_rule_ids:
+            displayed_evidence.append(localized)
     ai_invoked = runtime is not None and llm_attempted
     fallback_used = runtime is not None and (not llm_attempted or llm_failed)
+    reviewed_at = _utc_now()
+    manual_review = "manual_review" in route_history
+    decision = decision_view(review.summary, manual_review=manual_review)
+    decision["authority"] = "deterministic_decision_policy"
+    analysis_view = _analysis_view(risk_analysis, passed_checks)
     return {
         "run_id": record.run_id,
         "project": record.project.to_dict(),
-        "reviewed_at": _utc_now(),
+        "reviewed_at": reviewed_at,
+        "reviewed_at_label": format_zh_datetime(reviewed_at),
         "mode": record.mode,
         "mode_label": "AI 智能审查" if record.mode == "ai" else "基础扫描",
         "duration_seconds": round(finished - record.started_monotonic, 2),
-        "decision": {
-            "release_allowed": review.release_allowed,
-            "label": "允许发布" if review.release_allowed else "阻止发布",
-            "authority": "deterministic_decision_policy",
-        },
+        "decision": decision,
         "summary": dict(review.summary),
         "checks": checks,
-        "evidence": evidence,
-        "risk_analysis": risk_analysis,
+        "check_groups": {
+            "actionable": actionable_checks,
+            "passed": passed_checks,
+            "skipped": skipped_checks,
+        },
+        "evidence": displayed_evidence,
+        "evidence_candidates": evidence_candidates,
+        "risk_analysis": analysis_view,
         "fix_plan": fix_plan,
         "route_history": route_history,
+        "route_steps": [
+            {"key": route, "label": localize_route(route)} for route in route_history
+        ],
         "ai": {
             "ai_invoked": ai_invoked,
             "provider": runtime.provider if runtime else None,
             "model": runtime.model if runtime else None,
             "latency_ms": _llm_latency(trace),
             "fallback_used": fallback_used,
-            "evidence_count": len(evidence),
+            "evidence_count": len(displayed_evidence),
             "error_type": error_type,
             "error_message": _ai_run_error_message(error_type),
             "message": (
@@ -405,6 +431,65 @@ def _build_result_payload(
         "trace": trace,
         "artifacts": {},
     }
+
+
+def _referenced_evidence_ids(
+    risk_analysis: dict[str, Any],
+    fix_plan: list[dict[str, Any]],
+) -> set[str]:
+    values: set[str] = set()
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if key == "evidence_ids" and isinstance(nested, list):
+                    values.update(item for item in nested if isinstance(item, str))
+                else:
+                    collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    collect(risk_analysis)
+    collect(fix_plan)
+    return values
+
+
+def _analysis_view(
+    risk_analysis: dict[str, Any],
+    passed_checks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    view = dict(risk_analysis)
+    summary = str(
+        view.get("executive_summary")
+        or view.get("summary")
+        or "本次审查已完成，请以确定性检查结果为准。"
+    )
+    view.setdefault("executive_summary", summary)
+    view.setdefault("summary", summary)
+    view.setdefault("release_recommendation", "请按优先级处理问题后重新执行审查。")
+    view.setdefault(
+        "positive_findings",
+        [str(item["message"]) for item in passed_checks[:5]],
+    )
+    view.setdefault("risk_analysis", view.get("prioritized_risks", []))
+    view["risk_analysis"] = [
+        {
+            **dict(item),
+            "severity_label": SEVERITY_LABELS.get(
+                str(item.get("severity", "info")), "未知"
+            ),
+        }
+        for item in view["risk_analysis"]
+        if isinstance(item, dict)
+    ]
+    view.setdefault("prioritized_actions", view.get("fix_plan", []))
+    view.setdefault(
+        "final_verification_steps",
+        ["运行项目测试。", "重新执行 ReleaseGuard，确认问题数量和发布结论。"],
+    )
+    view.setdefault("limitations", view.get("missing_evidence_notes", []))
+    return view
 
 
 def _llm_latency(trace: dict[str, Any]) -> float | None:
@@ -430,32 +515,55 @@ def _release_report_markdown(payload: dict[str, Any]) -> str:
         f"- 模式：{payload['mode_label']}",
         f"- 结论：{payload['decision']['label']}",
         f"- 真实 AI：{'是' if ai['ai_invoked'] else '否'}",
-        f"- 问题：{summary['failed']} 失败 / {summary['warning']} 警告",
+        f"- 审查时间：{payload['reviewed_at_label']}",
+        f"- 问题：{summary['blocking']} 阻断 / {summary['warning']} 警告",
         "",
-        "## 风险总结",
+        "## AI 综合分析",
         "",
-        str(payload["risk_analysis"].get("summary", "暂无总结。")),
+        str(payload["risk_analysis"].get("executive_summary", "暂无总结。")),
         "",
-        "## 确定性检查结果",
+        "### 项目做得好的地方",
         "",
     ]
-    for check in payload["checks"]:
+    for finding in payload["risk_analysis"].get("positive_findings", []):
+        lines.append(f"- {finding}")
+    lines.extend([
+        "",
+        "### 发布建议",
+        "",
+        str(payload["risk_analysis"].get("release_recommendation", "请以确定性结论为准。")),
+        "",
+        "## 需要处理的问题",
+        "",
+    ])
+    for check in payload["check_groups"]["actionable"]:
         lines.append(
-            f"- [{check['status']}] {check['title']} — {check['message']}"
+            f"- [{check['status_label']}] {check['title']} — {check['message']}"
         )
     lines.extend(["", "## 优先修复计划", ""])
     if not payload["fix_plan"]:
         lines.append("当前没有需要执行的阻断修复项。")
     for step in payload["fix_plan"]:
-        lines.append(
-            f"- P{step.get('priority', '-')} {step.get('title', '修复项')}："
-            f"{step.get('action', '')}"
-        )
+        lines.extend([
+            f"### P{step.get('priority', '-')} {step.get('title', '修复项')}",
+            "",
+            f"- 目标：{step.get('objective', step.get('action', ''))}",
+            f"- 原因：{step.get('why', '')}",
+            "- 操作步骤：",
+        ])
+        for index, action in enumerate(step.get("steps", []), start=1):
+            lines.append(f"  {index}. {action}")
+        lines.extend([
+            "- 建议文件：" + "、".join(step.get("suggested_files", [])),
+            f"- 验证：`{step.get('verification_command', step.get('validation', ''))}`",
+            f"- 成功标准：{step.get('success_criteria', '')}",
+            "",
+        ])
     lines.extend(["", "## 规则证据", ""])
     for item in payload["evidence"]:
         lines.append(
             f"- {item.get('evidence_id')} / {item.get('rule_id')}："
-            f"{item.get('text', '')}（{item.get('source_url', '')}）"
+            f"{item.get('summary_zh', '')}（{item.get('source_url', '')}）"
         )
     return "\n".join(lines) + "\n"
 
@@ -469,9 +577,29 @@ def _fix_plan_markdown(payload: dict[str, Any]) -> str:
             [
                 f"## P{step.get('priority', '-')} {step.get('title', '修复项')}",
                 "",
-                str(step.get("action", "")),
+                f"目标：{step.get('objective', step.get('action', ''))}",
                 "",
-                f"验证：{step.get('validation', '重新运行 ReleaseGuard。')}",
+                f"原因：{step.get('why', '')}",
+                "",
+                "操作步骤：",
+                *[
+                    f"{index}. {action}"
+                    for index, action in enumerate(step.get("steps", []), start=1)
+                ],
+                "",
+                "建议文件：" + "、".join(step.get("suggested_files", [])),
+                "",
+                "示例：",
+                "```",
+                str(step.get("example", "")),
+                "```",
+                "",
+                "验证命令：",
+                "```text",
+                str(step.get("verification_command", step.get("validation", "重新运行 ReleaseGuard。"))),
+                "```",
+                "",
+                f"成功标准：{step.get('success_criteria', '')}",
                 "",
             ]
         )

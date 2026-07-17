@@ -1,6 +1,6 @@
 # ReleaseGuard Agent Implementation Status
 
-Last verified: 2026-07-17 (local AI Web product entry)
+Last verified: 2026-07-17 (zh-CN actionable AI report)
 
 This page is the evidence-backed status of the local repository. A directory,
 class name, roadmap item, or resume keyword is not treated as implemented
@@ -65,7 +65,7 @@ still insufficient, and route LLM failures through a deterministic fallback.
 | Optional LLM risk analysis | COMPLETE | CLI can enrich an existing deterministic review through `LLMReviewService`; FakeLLM covers the product path offline and deterministic facts remain authoritative. |
 | OpenAI-compatible adapter | COMPLETE | Explicit provider/model/base URL/timeout environment configuration builds the lazy SDK adapter; missing key falls back to deterministic mode and errors are sanitized. Real network interoperability is optional and not asserted by offline tests. |
 | Trace | COMPLETE | Existing run traces remain available; Agent and verification flows additionally record redacted node/tool/retrieval/LLM events, route history, provenance IDs, latency, optional token usage, artifacts, errors, and before/after deltas. |
-| Unit and integration tests | COMPLETE | 326 unit tests and 35 CLI/API/launcher/Web integration tests pass at the local AI Web checkpoint. |
+| Unit and integration tests | COMPLETE | 333 unit tests and 36 CLI/API/launcher/Web integration tests pass at the zh-CN report checkpoint. |
 | E2E and eval system | COMPLETE | A real Uvicorn health smoke test and a fixed offline golden-case eval cover six required metrics. FakeLLM/fixed embeddings prove repeatability and wiring, not provider or semantic quality. |
 | FastAPI product API | COMPLETE | `GET /health`, `POST /reviews`, and `POST /verifications` are real synchronous routes with strict schemas, safe path policy, uniform errors, TestClient integration, and Uvicorn health smoke coverage. |
 | Agent tools and LangGraph | COMPLETE | Reachable tool wrappers are called by a typed `StateGraph`; the graph has normal and conditional edges, is compiled, invoked by a service and CLI, and has four distinct tested routes. |
@@ -74,7 +74,7 @@ still insufficient, and route LLM failures through a deterministic fallback.
 | Docker packaging | COMPLETE | The non-root demo image builds on Docker Desktop/Linux, serves all three API endpoints, runs as UID 10001, and reaches Docker health `healthy`. It remains a demo image, not an untrusted-code sandbox. |
 | GitHub Actions | COMPLETE | Push run #1 for `yin/releaseguard-complete` completed successfully on Ubuntu: quality/tests/Eval and container smoke both passed. |
 | Windows one-click entry | COMPLETE | Root `ReleaseGuard.bat` starts Uvicorn on `127.0.0.1`, waits for health, and opens the user homepage. The old menu remains an explicit compatibility action. |
-| Local AI Web experience | COMPLETE | Jinja2/native HTML/CSS/JS pages provide provider configuration, native Windows folder selection with text fallback, background progress, basic/AI mode separation, browser-native result presentation, downloads, and persisted last-run access. Real AI state is never inferred from FakeLLM or deterministic fallback. |
+| Local AI Web experience | COMPLETE | Jinja2/native HTML/CSS/JS pages provide provider configuration, native Windows folder selection with text fallback, background progress, basic/AI mode separation, browser-native result presentation, downloads, and persisted last-run access. The result page defaults to zh-CN, separates actionable/passed/skipped checks, filters formal Evidence to cited or issue-linked rules, and renders structured repair actions. Real AI state is never inferred from FakeLLM or deterministic fallback. |
 
 ## Current main flow
 
@@ -289,6 +289,21 @@ Local AI Web product verification:
 | Docker build/runtime | Passed: Web image, homepage, health, offline UI review, four artifacts, UID 10001, health `healthy` |
 | Real provider request | Not run automatically; only the user-facing “测试连接” action may initiate it |
 | Remote GitHub Actions | Run #2 (`29567733870`) on Web commit `6fbaf26` succeeded; quality/tests and container smoke were green |
+
+Chinese actionable-report verification:
+
+| Suite/check | Result |
+| --- | --- |
+| Report/Agent/Web focused selection | 30 passed |
+| `tests/unit` | 333 passed |
+| `tests/integration` | 36 passed |
+| `tests/e2e` | 1 passed |
+| Full suite | 370 passed |
+| Ruff | Passed |
+| Mypy | 84 source files, no issues |
+| `git diff --check` | Passed |
+| Docker build/runtime | Passed: zh-CN homepage, health `healthy`, offline review and Chinese result sections, UID 10001 |
+| Real provider request | Not run automatically; Chinese response depth requires the user's explicit in-page experience acceptance |
 
 ## Known risks
 

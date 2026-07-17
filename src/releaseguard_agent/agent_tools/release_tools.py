@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from releaseguard_agent.agents.release_risk_analysis_agent import (
+    ReportDetailLevel,
     ReleaseRiskAnalysisAgent,
     ReleaseRiskAnalysisContext,
 )
@@ -95,8 +96,16 @@ class RiskToolResult:
 class RiskAnalysisTool:
     """Produce guarded risk analysis with deterministic LLM fallback."""
 
-    def __init__(self, runtime: LLMRuntime | None = None) -> None:
+    def __init__(
+        self,
+        runtime: LLMRuntime | None = None,
+        *,
+        locale: str = "zh-CN",
+        detail_level: ReportDetailLevel = "standard",
+    ) -> None:
         self._runtime = runtime
+        self._locale = locale
+        self._detail_level = detail_level
 
     def invoke(
         self,
@@ -137,6 +146,15 @@ class RiskAnalysisTool:
         context = ReleaseRiskAnalysisContext(
             advice_result=advice,
             retrieval_evidence=evidence,
+            check_results=tuple(
+                {
+                    **item.to_dict(),
+                    "check_result_id": _check_result_id(index, item.rule_id),
+                }
+                for index, item in enumerate(review.check_results, start=1)
+            ),
+            locale=self._locale,
+            detail_level=self._detail_level,
         )
         try:
             if tracer is None:
@@ -243,15 +261,19 @@ def _deterministic_risk_payload(
         "analysis_source": "deterministic",
         "risk_level": risk_level,
         "summary": (
-            f"{len(blocking)} deterministic blocking finding(s)."
+            f"发现 {len(blocking)} 项确定性阻断问题。"
             if blocking
-            else "No deterministic blocking findings."
+            else "未发现确定性阻断问题。"
         ),
         "release_allowed": review.release_allowed,
         "release_status": "release" if review.release_allowed else "block",
         "evidence_ids": [item.evidence_id for item in evidence],
         "fix_plan": [],
     }
+
+
+def _check_result_id(index: int, rule_id: str | None) -> str:
+    return f"CHECK-{index:03d}-{rule_id or 'NO-RULE'}"
 
 
 def _llm_error_type(exc: Exception) -> str:

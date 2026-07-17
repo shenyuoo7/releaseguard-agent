@@ -1,7 +1,7 @@
 # ReleaseGuard Agent
 
-ReleaseGuard Agent is an AI Agent system for pre-release review of software
-projects.
+ReleaseGuard Agent is currently a CLI-first pre-release review system that is
+being developed toward a multi-agent RAG system for software release review.
 
 It scans a project before release, runs deterministic release-readiness checks,
 enriches findings with rule evidence, and writes human-readable and
@@ -13,8 +13,9 @@ Phase 1 focuses on Python projects, including:
 - `fastapi`
 - `flask`
 
-The current implementation is CLI-first and keeps space for a future API
-service.
+The CLI is the only current product entry point. Standalone LLM analysis code
+and an OpenAI-compatible provider adapter exist, but neither is connected to
+the CLI or another product entry point.
 
 ## What it checks today
 
@@ -51,6 +52,7 @@ A full CLI run can generate the following files:
 From the repository root:
 
 ```powershell
+$env:PYTHONPATH = "src"
 .venv\Scripts\python.exe -m releaseguard_agent.cli.main check sample_projects\clean_python_project --format json --output-dir outputs\demo-report --checklist-output-dir outputs\demo-checklist --agent-advice-output-dir outputs\demo-advice --trace-output-dir outputs\demo-trace
 ```
 
@@ -74,6 +76,10 @@ outputs/
 ```
 
 ## Common CLI commands
+
+The project does not yet have installable package metadata. Set
+`$env:PYTHONPATH = "src"` once in the current PowerShell session before using
+the CLI commands below.
 
 Run checks with text output:
 
@@ -159,11 +165,11 @@ git diff --check
 
 ## Documentation
 
-More detailed CLI usage is available in:
+More detailed documentation is available in:
 
-```text
-docs/usage/cli.md
-```
+- [Current implementation status](docs/IMPLEMENTATION_STATUS.md)
+- [CLI usage](docs/usage/cli.md)
+- [Current architecture](docs/architecture/current-architecture.md)
 
 ## Current project status
 
@@ -171,5 +177,8 @@ The project currently has a working CLI path for Python/FastAPI/Flask
 release-readiness review, deterministic rule evidence enrichment, release
 decision advice, report artifacts, checklist artifacts, and trace artifacts.
 
-Future phases may add an API service, history storage, additional ecosystems,
-richer rule retrieval, and more output formats.
+The current rule lookup is exact and local; it is not BM25, vector retrieval,
+or hybrid RAG. FastAPI service endpoints, LangGraph, role-based multi-agent
+orchestration, automatic post-fix verification, Docker packaging, and GitHub
+Actions remain planned work. See the implementation status page for the
+evidence-backed boundary.

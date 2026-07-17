@@ -7,6 +7,11 @@ from releaseguard_agent.llm import (
     LLMMessage,
     LLMResponse,
     MissingFakeLLMResponseError,
+    OpenAIChatCompletionClient,
+    OpenAIClientConfigurationError,
+    OpenAIClientDependencyError,
+    OpenAIClientRequestError,
+    OpenAIClientResponseError,
 )
 
 
@@ -26,6 +31,22 @@ def test_llm_public_api_exports_provider_abstraction_helpers() -> None:
         MissingFakeLLMResponseError.__name__
         == "MissingFakeLLMResponseError"
     )
+    assert OpenAIChatCompletionClient.__name__ == (
+        "OpenAIChatCompletionClient"
+    )
+    assert OpenAIClientConfigurationError.__name__ == (
+        "OpenAIClientConfigurationError"
+    )
+    assert (
+        OpenAIClientDependencyError.__name__
+        == "OpenAIClientDependencyError"
+    )
+    assert OpenAIClientRequestError.__name__ == (
+        "OpenAIClientRequestError"
+    )
+    assert OpenAIClientResponseError.__name__ == (
+        "OpenAIClientResponseError"
+    )
 
 
 def test_llm_public_api_defines_explicit_all() -> None:
@@ -37,4 +58,9 @@ def test_llm_public_api_defines_explicit_all() -> None:
         "LLMMessage",
         "LLMResponse",
         "MissingFakeLLMResponseError",
+        "OpenAIChatCompletionClient",
+        "OpenAIClientConfigurationError",
+        "OpenAIClientDependencyError",
+        "OpenAIClientRequestError",
+        "OpenAIClientResponseError",
     ]

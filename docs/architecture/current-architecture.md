@@ -31,8 +31,12 @@ Not supported in phase one:
 Current entry point:
 
 ```powershell
+$env:PYTHONPATH = "src"
 .venv\Scripts\python.exe -m releaseguard_agent.cli.main
 ```
+
+The project does not yet have installable package metadata, so direct CLI use
+from a fresh PowerShell session requires `PYTHONPATH=src`.
 
 ## High-level architecture
 
@@ -316,11 +320,18 @@ src/releaseguard_agent/agents/release_decision_advisor.py
 src/releaseguard_agent/agents/release_decision_advice_service.py
 src/releaseguard_agent/agents/release_decision_advice_writer.py
 src/releaseguard_agent/agents/release_decision_workflow.py
+src/releaseguard_agent/agents/release_risk_analysis_agent.py
+src/releaseguard_agent/agents/release_risk_analysis_service.py
+src/releaseguard_agent/agents/release_risk_analysis_writer.py
+src/releaseguard_agent/llm/client.py
+src/releaseguard_agent/llm/fake_client.py
+src/releaseguard_agent/llm/openai_client.py
 ```
 
-The current Agent layer is deterministic.
-
-It does not call an LLM.
+The CLI-connected Agent decision layer is deterministic and does not call an
+LLM. The repository also contains a standalone LLM risk-analysis Agent,
+artifact writer, and service. Those components use an injected `LLMClient` but
+are not called by the CLI or another product entry point.
 
 Current responsibilities:
 
@@ -410,6 +421,7 @@ The project currently exposes several package-level public API surfaces:
 
 ```text
 releaseguard_agent.agents
+releaseguard_agent.llm
 releaseguard_agent.rag
 releaseguard_agent.reports
 releaseguard_agent.observability
@@ -430,9 +442,9 @@ The current implementation intentionally keeps these behaviors deterministic:
 - checklist writing
 - trace writing
 
-The current implementation intentionally avoids:
+The current product entry points intentionally avoid:
 
-- live LLM calls
+- automatic live LLM calls
 - embeddings
 - vector databases
 - network retrieval
@@ -553,3 +565,8 @@ CLI
 This gives the project a working phase-one release-review pipeline while
 keeping the architecture open for future API, plugin, persistence, and richer
 RAG/LLM capabilities.
+
+Separately, a provider-neutral LLM boundary, fake client, standalone risk
+analysis Agent/service, and OpenAI-compatible adapter are available for
+offline-tested development. They are not part of the CLI flow shown above and
+do not establish production LLM integration by themselves.

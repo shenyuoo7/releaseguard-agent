@@ -1,6 +1,6 @@
 # ReleaseGuard Agent Implementation Status
 
-Last verified: 2026-07-17 (zh-CN actionable AI report)
+Last verified: 2026-07-17 (safe local review history management)
 
 This page is the evidence-backed status of the local repository. A directory,
 class name, roadmap item, or resume keyword is not treated as implemented
@@ -23,6 +23,21 @@ remain process-memory-only by default or use Windows current-user encryption.
 Real network access occurs only when the user explicitly tests a connection or
 runs AI review after that test succeeds. Results render in the browser and are
 persisted under `outputs/runs/{run_id}/` without a database.
+
+The local Web UI also provides `/history`. `RunHistoryService` reads only the
+summary fields needed for a 20-item server-paginated list and does not load
+Markdown or `trace.json`; the result page fetches trace only when advanced
+details are expanded. A user can hide one run through the atomically written,
+Git-ignored `.runtime/history_hidden.json`, restore it, or explicitly delete
+that one run after same-origin and CSRF checks. Deletion rejects active runs,
+invalid IDs, path traversal, root targets, and symbolic-link/reparse-point
+content. There is no bulk delete or automatic report cleanup.
+
+`StorageAuditService` classifies repository-local runtime data without reading
+file contents or exposing secrets. It has no delete method: `/storage` explains
+which paths are user data, credentials/current runtime, rebuildable cache,
+historical test temporary data, or unknown, and shows the impact of any future
+user-confirmed cleanup.
 
 The CLI delegates its business workflow to `ReleaseReviewService`. The service
 runs deterministic checkers once, builds `CheckResult` records, applies the
@@ -65,7 +80,7 @@ still insufficient, and route LLM failures through a deterministic fallback.
 | Optional LLM risk analysis | COMPLETE | CLI can enrich an existing deterministic review through `LLMReviewService`; FakeLLM covers the product path offline and deterministic facts remain authoritative. |
 | OpenAI-compatible adapter | COMPLETE | Explicit provider/model/base URL/timeout environment configuration builds the lazy SDK adapter; missing key falls back to deterministic mode and errors are sanitized. Real network interoperability is optional and not asserted by offline tests. |
 | Trace | COMPLETE | Existing run traces remain available; Agent and verification flows additionally record redacted node/tool/retrieval/LLM events, route history, provenance IDs, latency, optional token usage, artifacts, errors, and before/after deltas. |
-| Unit and integration tests | COMPLETE | 333 unit tests and 36 CLI/API/launcher/Web integration tests pass at the zh-CN report checkpoint. |
+| Unit and integration tests | COMPLETE | 348 unit tests and 41 CLI/API/launcher/Web integration tests pass at the history-management checkpoint. |
 | E2E and eval system | COMPLETE | A real Uvicorn health smoke test and a fixed offline golden-case eval cover six required metrics. FakeLLM/fixed embeddings prove repeatability and wiring, not provider or semantic quality. |
 | FastAPI product API | COMPLETE | `GET /health`, `POST /reviews`, and `POST /verifications` are real synchronous routes with strict schemas, safe path policy, uniform errors, TestClient integration, and Uvicorn health smoke coverage. |
 | Agent tools and LangGraph | COMPLETE | Reachable tool wrappers are called by a typed `StateGraph`; the graph has normal and conditional edges, is compiled, invoked by a service and CLI, and has four distinct tested routes. |
@@ -75,6 +90,7 @@ still insufficient, and route LLM failures through a deterministic fallback.
 | GitHub Actions | COMPLETE | Push run #1 for `yin/releaseguard-complete` completed successfully on Ubuntu: quality/tests/Eval and container smoke both passed. |
 | Windows one-click entry | COMPLETE | Root `ReleaseGuard.bat` starts Uvicorn on `127.0.0.1`, waits for health, and opens the user homepage. The old menu remains an explicit compatibility action. |
 | Local AI Web experience | COMPLETE | Jinja2/native HTML/CSS/JS pages provide provider configuration, native Windows folder selection with text fallback, background progress, basic/AI mode separation, browser-native result presentation, downloads, and persisted last-run access. The result page defaults to zh-CN, separates actionable/passed/skipped checks, filters formal Evidence to cited or issue-linked rules, and renders structured repair actions. Real AI state is never inferred from FakeLLM or deterministic fallback. |
+| Local review history | COMPLETE | `/history` uses server-side pagination and summary-only reads, preserves hidden reports on disk, supports restore and safe single-run deletion, disables missing artifacts, and lazily loads trace. `/storage` is a metadata-only recommendation view and never cleans automatically. |
 
 ## Current main flow
 
@@ -304,6 +320,17 @@ Chinese actionable-report verification:
 | `git diff --check` | Passed |
 | Docker build/runtime | Passed: zh-CN homepage, health `healthy`, offline review and Chinese result sections, UID 10001 |
 | Real provider request | Not run automatically; Chinese response depth requires the user's explicit in-page experience acceptance |
+
+Safe review-history verification:
+
+| Suite/check | Result |
+| --- | --- |
+| History/storage/Web focused selection | 28 passed |
+| `tests/unit` | 348 passed |
+| `tests/integration` | 41 passed |
+| `tests/e2e` | 1 passed |
+| Full suite | 390 passed |
+| Runtime storage audit | Metadata-only; no cache, report, credential, or user file deleted |
 
 ## Known risks
 

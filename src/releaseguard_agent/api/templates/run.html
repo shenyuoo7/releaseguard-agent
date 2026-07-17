@@ -177,7 +177,7 @@
     {% else %}<p>本次没有与当前问题或 AI 分析直接关联的规则证据。</p>{% endfor %}
   </section>
 
-  <details class="panel content-section result-details advanced-details">
+  <details class="panel content-section result-details advanced-details" id="advanced-run-details" data-trace-url="/api/runs/{{ run_id }}/trace">
     <summary>高级执行详情</summary>
     <h3>工作流执行节点</h3>
     <ol class="route-list">{% for node in result.route_steps %}<li>{{ node.label }}</li>{% endfor %}</ol>
@@ -186,13 +186,15 @@
     <h3>确定性检查技术原文</h3>
     <pre>{{ result.checks | tojson(indent=2) }}</pre>
     <h3>原始执行轨迹</h3>
-    <pre>{{ result.trace | tojson(indent=2) }}</pre>
+    <pre id="trace-output">展开后加载执行轨迹。</pre>
     <a class="button secondary" href="/runs/{{ run_id }}/download/json">下载 JSON</a>
   </details>
 
   <div class="result-actions">
     <a class="button primary" href="/">重新审查</a>
+    <a class="button secondary" href="/history">查看审查历史</a>
     <a class="button secondary" href="/runs/{{ run_id }}/download/markdown">下载完整 Markdown</a>
+    <a class="button secondary" href="/runs/{{ run_id }}/download/fix-plan">下载修复计划</a>
     <button class="button ghost" id="open-result-directory" data-run-id="{{ run_id }}" type="button">打开结果目录</button>
   </div>
 </section>

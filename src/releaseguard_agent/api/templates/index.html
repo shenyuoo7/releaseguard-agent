@@ -51,6 +51,7 @@
   <button class="button primary large" id="start-review" type="button">开始审查</button>
   <div class="secondary-actions">
     {% if latest_run_id %}<a href="/runs/{{ latest_run_id }}">查看上一次结果</a>{% else %}<span class="muted">还没有历史结果</span>{% endif %}
+    <a href="/history">查看全部历史记录</a>
   </div>
 </section>
 

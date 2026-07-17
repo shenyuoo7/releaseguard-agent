@@ -121,8 +121,11 @@ class LocalRunStore:
             "trace": directory / "trace.json",
         }
         payload["artifacts"] = {name: str(path) for name, path in paths.items()}
+        persisted_payload = dict(payload)
+        persisted_payload.pop("trace", None)
         paths["result_json"].write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n",
+            json.dumps(persisted_payload, ensure_ascii=False, indent=2, default=str)
+            + "\n",
             encoding="utf-8",
         )
         paths["release_report"].write_text(
@@ -144,6 +147,26 @@ class LocalRunStore:
         except (OSError, json.JSONDecodeError):
             return None
         return value if isinstance(value, dict) else None
+
+    def load_trace(self, run_id: str) -> dict[str, Any] | None:
+        path = self.artifact_path(run_id, "trace.json")
+        if not path.is_file():
+            return None
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def artifact_path(self, run_id: str, filename: str) -> Path:
+        if filename not in {
+            "result.json",
+            "release_report.md",
+            "fix_plan.md",
+            "trace.json",
+        }:
+            raise LocalRunError("不支持的审查产物。")
+        return self.run_directory(run_id) / filename
 
     def latest_run_id(self) -> str | None:
         if not self.output_root.exists():
@@ -206,6 +229,18 @@ class LocalReviewRunService:
         if record and record.result is not None:
             return record.result
         return self.store.load(run_id)
+
+    def is_active(self, run_id: str) -> bool:
+        record = self.get_record(run_id)
+        return record is not None and record.status in {"queued", "running"}
+
+    def result_for_page(self, run_id: str) -> dict[str, Any] | None:
+        result = self.result(run_id)
+        if result is None:
+            return None
+        public_result = dict(result)
+        public_result.pop("trace", None)
+        return public_result
 
     def wait(self, run_id: str, timeout: float = 30.0) -> LocalRunRecord:
         deadline = time.monotonic() + timeout

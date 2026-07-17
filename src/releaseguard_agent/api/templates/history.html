@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}审查历史 · ReleaseGuard{% endblock %}
+{% block content %}
+<section class="result-page history-page" data-csrf-token="{{ csrf_token }}">
+  <div class="result-heading">
+    <div><a class="back-link" href="/">← 返回审查首页</a><h1>审查历史</h1><p>报告保存在本机，不使用数据库。</p></div>
+  </div>
+
+  <section class="panel storage-summary">
+    <div><span>历史记录</span><strong>{{ storage.run_count }}</strong></div>
+    <div><span>历史报告</span><strong>{{ storage.history_size_label }}</strong></div>
+    <div><span>可重建缓存</span><strong>{{ storage.rebuildable_cache_size_label }}</strong></div>
+    <div><span>历史测试临时文件</span><strong>{{ storage.historical_test_size_label }}</strong></div>
+    <p>最近扫描：{{ storage.scanned_at_label }} · <a href="/storage">查看清理建议</a></p>
+  </section>
+
+  <form class="panel history-filters" method="get" action="/history">
+    <label>项目名称<input name="search" value="{{ filters.search }}" placeholder="搜索项目"></label>
+    <label>审查模式<select name="mode"><option value="all">全部</option><option value="basic" {% if filters.mode == 'basic' %}selected{% endif %}>基础扫描</option><option value="ai" {% if filters.mode == 'ai' %}selected{% endif %}>AI 智能审查</option></select></label>
+    <label>发布结论<select name="decision"><option value="all">全部</option><option value="ready" {% if filters.decision == 'ready' %}selected{% endif %}>可以发布</option><option value="warning" {% if filters.decision == 'warning' %}selected{% endif %}>建议先修复</option><option value="blocked" {% if filters.decision == 'blocked' %}selected{% endif %}>暂不建议发布</option><option value="review" {% if filters.decision == 'review' %}selected{% endif %}>人工复核</option></select></label>
+    <label>清单状态<select name="visibility"><option value="visible">正常记录</option><option value="hidden" {% if filters.visibility == 'hidden' %}selected{% endif %}>已隐藏记录</option><option value="all" {% if filters.visibility == 'all' %}selected{% endif %}>全部记录</option></select></label>
+    <button class="button primary" type="submit">筛选</button>
+  </form>
+
+  <section class="history-list">
+    {% for item in history_page.items %}
+    <article class="panel history-card {% if item.damaged %}damaged{% endif %}" data-run-id="{{ item.run_id }}" data-project-name="{{ item.project_name }}" data-reviewed-at="{{ item.reviewed_at_label }}" data-size="{{ item.size_label }}">
+      <div class="history-card-heading"><div><h2>{{ item.project_name }}</h2><p>{{ item.reviewed_at_label }} · {{ item.mode_label }}</p></div><span class="decision {{ item.decision_state }}">{{ item.decision_label }}</span></div>
+      {% if item.damaged %}<p class="message error">{{ item.error_message }}</p>{% else %}<p class="path-text">{{ item.project_path }}</p>{% endif %}
+      <div class="history-meta"><span>阻断 {{ item.blocking }}</span><span>警告 {{ item.warning }}</span><span>通过 {{ item.passed }}</span><span>{% if item.ai_invoked %}已调用真实 AI{% else %}未调用 AI{% endif %}</span><span>{{ item.size_label }}</span></div>
+      <div class="result-actions compact">
+        {% if not item.damaged %}<a class="button primary" href="/runs/{{ item.run_id }}">查看详情</a>{% endif %}
+        {% if item.artifacts.markdown %}<a class="button secondary" href="/runs/{{ item.run_id }}/download/markdown">下载 Markdown</a>{% else %}<span class="button disabled">无 Markdown</span>{% endif %}
+        {% if item.artifacts.json %}<a class="button secondary" href="/runs/{{ item.run_id }}/download/json">下载 JSON</a>{% else %}<span class="button disabled">无 JSON</span>{% endif %}
+        {% if item.artifacts.fix_plan %}<a class="button secondary" href="/runs/{{ item.run_id }}/download/fix-plan">下载修复计划</a>{% else %}<span class="button disabled">无修复计划</span>{% endif %}
+        {% if not item.damaged %}<button class="button ghost history-open-directory" type="button">打开结果目录</button>{% endif %}
+        {% if item.hidden %}<button class="button secondary history-restore" type="button">恢复到清单</button>{% else %}<button class="button danger history-remove" type="button">删除</button>{% endif %}
+      </div>
+    </article>
+    {% else %}<section class="panel empty-state"><h2>没有符合条件的历史记录</h2><p>可以返回首页运行一次审查。</p></section>{% endfor %}
+  </section>
+
+  {% if history_page.pages > 1 %}<nav class="pagination" aria-label="历史分页">{% for number in range(1, history_page.pages + 1) %}<a class="{% if number == history_page.page %}current{% endif %}" href="?page={{ number }}&search={{ filters.search | urlencode }}&mode={{ filters.mode }}&decision={{ filters.decision }}&visibility={{ filters.visibility }}">{{ number }}</a>{% endfor %}</nav>{% endif %}
+</section>
+
+<dialog id="history-remove-dialog" class="confirm-dialog">
+  <form method="dialog"><h2>删除审查记录</h2><dl><dt>项目名称</dt><dd id="remove-project"></dd><dt>审查时间</dt><dd id="remove-time"></dd><dt>run_id</dt><dd id="remove-run-id"></dd><dt>本地文件大小</dt><dd id="remove-size"></dd></dl><p class="warning-text">彻底删除后无法恢复；从清单移除不会释放磁盘空间。</p><div class="dialog-actions"><button class="button secondary" value="cancel" id="remove-cancel" autofocus>取消</button><button class="button ghost" value="list_only">从清单移除（保留本地文件）</button><button class="button danger" value="list_and_files">彻底删除记录和本地文件</button></div><p id="remove-error" class="message error" hidden></p></form>
+</dialog>
+{% endblock %}

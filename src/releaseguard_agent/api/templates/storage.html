@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}存储清理建议 · ReleaseGuard{% endblock %}
+{% block content %}
+<section class="result-page"><div class="result-heading"><div><a class="back-link" href="/history">← 返回审查历史</a><h1>存储清理建议</h1><p>本页只做只读审计，不提供一键清理，也不会删除任何文件。</p></div></div>
+<section class="storage-list">{% for item in entries %}<article class="panel storage-card"><div class="history-card-heading"><h2><code>{{ item.relative_path }}</code></h2><span class="rule-tag">{{ item.classification.value }}</span></div><p>{{ item.creator_consumer }}</p><dl><dt>大小</dt><dd>{{ item.size_label }}</dd><dt>文件数量</dt><dd>{{ item.file_count }}</dd><dt>最后修改</dt><dd>{{ item.last_modified or '目录不存在或为空' }}</dd><dt>是否可能正在使用</dt><dd>{{ '是' if item.may_be_active else '否' }}</dd><dt>删除后是否影响历史报告</dt><dd>{{ item.history_impact }}</dd><dt>是否可以自动重建</dt><dd>{{ '是' if item.rebuildable else '否' }}</dd><dt>性能影响</dt><dd>{{ item.performance_impact }}</dd><dt>建议</dt><dd>{{ item.recommendation }}</dd></dl></article>{% endfor %}</section>
+</section>
+{% endblock %}

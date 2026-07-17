@@ -184,4 +184,79 @@ document.addEventListener("DOMContentLoaded", () => {
     const passed = document.querySelector("#passed-checks");
     if (passed) passed.open = false;
   });
+
+  const advancedDetails = document.querySelector("#advanced-run-details");
+  advancedDetails?.addEventListener("toggle", async () => {
+    if (!advancedDetails.open || advancedDetails.dataset.loaded === "true") return;
+    const output = document.querySelector("#trace-output");
+    try {
+      const trace = await requestJson(advancedDetails.dataset.traceUrl);
+      output.textContent = JSON.stringify(trace, null, 2);
+      advancedDetails.dataset.loaded = "true";
+    } catch (error) {
+      output.textContent = error.message;
+    }
+  });
+
+  const historyPage = document.querySelector(".history-page");
+  const removeDialog = document.querySelector("#history-remove-dialog");
+  let pendingHistoryCard = null;
+  document.querySelectorAll(".history-remove").forEach((button) => {
+    button.addEventListener("click", () => {
+      pendingHistoryCard = button.closest(".history-card");
+      document.querySelector("#remove-project").textContent = pendingHistoryCard.dataset.projectName;
+      document.querySelector("#remove-time").textContent = pendingHistoryCard.dataset.reviewedAt;
+      document.querySelector("#remove-run-id").textContent = pendingHistoryCard.dataset.runId;
+      document.querySelector("#remove-size").textContent = pendingHistoryCard.dataset.size;
+      document.querySelector("#remove-error").hidden = true;
+      removeDialog.showModal();
+      document.querySelector("#remove-cancel").focus();
+    });
+  });
+  removeDialog?.addEventListener("close", async () => {
+    const scope = removeDialog.returnValue;
+    if (!pendingHistoryCard || !["list_only", "list_and_files"].includes(scope)) return;
+    try {
+      await requestJson(`/api/history/${pendingHistoryCard.dataset.runId}/remove`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-ReleaseGuard-CSRF": historyPage.dataset.csrfToken,
+        },
+        body: JSON.stringify({scope}),
+      });
+      window.location.reload();
+    } catch (error) {
+      showMessage(document.querySelector("#remove-error"), error.message, "error");
+      removeDialog.showModal();
+    }
+  });
+  document.querySelectorAll(".history-restore").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const card = button.closest(".history-card");
+      try {
+        await requestJson(`/api/history/${card.dataset.runId}/restore`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-ReleaseGuard-CSRF": historyPage.dataset.csrfToken,
+          },
+          body: "{}",
+        });
+        window.location.reload();
+      } catch (error) {
+        window.alert(error.message);
+      }
+    });
+  });
+  document.querySelectorAll(".history-open-directory").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const card = button.closest(".history-card");
+      try {
+        await requestJson(`/api/runs/${card.dataset.runId}/open-directory`, {method: "POST", body: "{}"});
+      } catch (error) {
+        window.alert(error.message);
+      }
+    });
+  });
 });

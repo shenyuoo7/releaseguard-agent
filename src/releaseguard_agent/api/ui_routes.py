@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+import secrets
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -24,6 +27,12 @@ from releaseguard_agent.services.local_run_service import (
     LocalReviewRunService,
     LocalRunError,
 )
+from releaseguard_agent.services.run_history_service import (
+    HistoryOperationError,
+    HistoryRemovalScope,
+    RunHistoryService,
+)
+from releaseguard_agent.services.storage_audit_service import StorageAuditService
 
 
 API_DIRECTORY = Path(__file__).resolve().parent
@@ -60,26 +69,40 @@ class DemoRunPayload(BaseModel):
     mode: Literal["basic", "ai"]
 
 
+class HistoryRemovalPayload(BaseModel):
+    scope: HistoryRemovalScope
+
+
 @dataclass
 class LocalWebDependencies:
     releaseguard_root: Path
     ai_settings: LocalAiSettingsService
     runs: LocalReviewRunService
     folder_picker: WindowsFolderPicker
+    history: RunHistoryService | None = None
+    storage_audit: StorageAuditService | None = None
+    csrf_token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
 
 
 def build_local_web_dependencies(releaseguard_root: Path) -> LocalWebDependencies:
     root = Path(releaseguard_root).resolve()
     ai_settings = LocalAiSettingsService(root / ".runtime")
+    runs = LocalReviewRunService(
+        releaseguard_root=root,
+        ai_settings=ai_settings,
+        output_root=root / "outputs" / "runs",
+    )
     return LocalWebDependencies(
         releaseguard_root=root,
         ai_settings=ai_settings,
-        runs=LocalReviewRunService(
-            releaseguard_root=root,
-            ai_settings=ai_settings,
-            output_root=root / "outputs" / "runs",
-        ),
+        runs=runs,
         folder_picker=WindowsFolderPicker(),
+        history=RunHistoryService(
+            runs.store,
+            hidden_state_path=root / ".runtime" / "history_hidden.json",
+            is_run_active=runs.is_active,
+        ),
+        storage_audit=StorageAuditService(root),
     )
 
 
@@ -88,6 +111,16 @@ def build_ui_router(
     templates: Jinja2Templates,
 ) -> APIRouter:
     router = APIRouter()
+    history = dependencies.history or RunHistoryService(
+        dependencies.runs.store,
+        hidden_state_path=dependencies.runs.store.output_root.parents[1]
+        / ".runtime"
+        / "history_hidden.json",
+        is_run_active=dependencies.runs.is_active,
+    )
+    storage_audit = dependencies.storage_audit or StorageAuditService(
+        dependencies.releaseguard_root
+    )
 
     @router.get("/", response_class=HTMLResponse, include_in_schema=False)
     def home(request: Request) -> HTMLResponse:
@@ -97,6 +130,7 @@ def build_ui_router(
             context={
                 "ai_status": dependencies.ai_settings.public_status(),
                 "latest_run_id": dependencies.runs.store.latest_run_id(),
+                "history_available": history.total_size()[0] > 0,
             },
         )
 
@@ -210,12 +244,108 @@ def build_ui_router(
             return RedirectResponse(url="/?message=no_previous_run", status_code=303)
         return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
 
+    @router.get("/history", response_class=HTMLResponse, include_in_schema=False)
+    def history_page(
+        request: Request,
+        page: int = 1,
+        search: str = "",
+        mode: str = "all",
+        decision: str = "all",
+        visibility: Literal["visible", "hidden", "all"] = "visible",
+    ) -> HTMLResponse:
+        result = history.list_runs(
+            page=page,
+            search=search,
+            mode=mode,
+            decision=decision,
+            visibility=visibility,
+        )
+        run_count, history_size = history.total_size()
+        audit_totals = storage_audit.totals()
+        return templates.TemplateResponse(
+            request=request,
+            name="history.html",
+            context={
+                "history_page": result,
+                "filters": {
+                    "search": search,
+                    "mode": mode,
+                    "decision": decision,
+                    "visibility": visibility,
+                },
+                "csrf_token": dependencies.csrf_token,
+                "storage": {
+                    "run_count": run_count,
+                    "history_size_label": _format_size(history_size),
+                    **audit_totals,
+                },
+            },
+        )
+
+    @router.get("/api/history", include_in_schema=False)
+    def history_api(
+        page: int = 1,
+        page_size: int = 20,
+        search: str = "",
+        mode: str = "all",
+        decision: str = "all",
+        visibility: Literal["visible", "hidden", "all"] = "visible",
+    ) -> dict[str, object]:
+        result = history.list_runs(
+            page=page,
+            page_size=page_size,
+            search=search,
+            mode=mode,
+            decision=decision,
+            visibility=visibility,
+        )
+        return {
+            "items": [item.to_dict() for item in result.items],
+            "page": result.page,
+            "page_size": result.page_size,
+            "total": result.total,
+            "pages": result.pages,
+        }
+
+    @router.post("/api/history/{run_id}/remove", include_in_schema=False)
+    async def remove_history(
+        request: Request,
+        run_id: str,
+    ) -> dict[str, object]:
+        _require_protected_json_request(request, dependencies.csrf_token)
+        try:
+            payload = HistoryRemovalPayload.model_validate(await request.json())
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail="删除范围无效。") from exc
+        try:
+            history.remove(run_id, payload.scope)
+        except HistoryOperationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "scope": payload.scope.value}
+
+    @router.post("/api/history/{run_id}/restore", include_in_schema=False)
+    def restore_history(request: Request, run_id: str) -> dict[str, bool]:
+        _require_protected_json_request(request, dependencies.csrf_token)
+        try:
+            history.restore(run_id)
+        except HistoryOperationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True}
+
+    @router.get("/storage", response_class=HTMLResponse, include_in_schema=False)
+    def storage_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request=request,
+            name="storage.html",
+            context={"entries": storage_audit.scan()},
+        )
+
     @router.get(
         "/runs/{run_id}", response_class=HTMLResponse, include_in_schema=False
     )
     def run_page(request: Request, run_id: str) -> HTMLResponse:
         record = dependencies.runs.get_record(run_id)
-        result = dependencies.runs.result(run_id)
+        result = dependencies.runs.result_for_page(run_id)
         if record is None and result is None:
             raise HTTPException(status_code=404, detail="审查任务不存在。")
         return templates.TemplateResponse(
@@ -235,14 +365,37 @@ def build_ui_router(
         names = {
             "markdown": "release_report.md",
             "json": "result.json",
+            "fix-plan": "fix_plan.md",
         }
         filename = names.get(artifact)
         if filename is None:
             raise HTTPException(status_code=404, detail="下载类型不存在。")
-        path = dependencies.runs.store.run_directory(run_id) / filename
+        try:
+            path = dependencies.runs.store.artifact_path(run_id, filename)
+        except LocalRunError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not path.is_file():
             raise HTTPException(status_code=404, detail="结果文件不存在。")
-        return FileResponse(path, filename=filename)
+        summary = history.summary(run_id)
+        suffix = path.suffix
+        safe_project = _safe_download_part(summary.project_name)
+        safe_time = re.sub(r"[^0-9]", "", summary.reviewed_at or "")[:14]
+        artifact_label = {
+            "markdown": "report",
+            "json": "result",
+            "fix-plan": "fix_plan",
+        }[artifact]
+        download_name = (
+            f"ReleaseGuard_{safe_project}_{safe_time}_{run_id}_{artifact_label}{suffix}"
+        )
+        return FileResponse(path, filename=download_name)
+
+    @router.get("/api/runs/{run_id}/trace", include_in_schema=False)
+    def run_trace(run_id: str) -> dict[str, object]:
+        trace = dependencies.runs.store.load_trace(run_id)
+        if trace is None:
+            raise HTTPException(status_code=404, detail="执行轨迹不存在。")
+        return trace
 
     @router.post(
         "/api/runs/{run_id}/open-directory", include_in_schema=False
@@ -263,3 +416,32 @@ def template_directory() -> Path:
 
 def static_directory() -> Path:
     return API_DIRECTORY / "static"
+
+
+def _require_protected_json_request(request: Request, csrf_token: str) -> None:
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(status_code=415, detail="该操作只接受 JSON 请求。")
+    origin = request.headers.get("origin")
+    if not origin:
+        raise HTTPException(status_code=403, detail="缺少同源请求信息。")
+    source = urlsplit(origin)
+    destination = urlsplit(str(request.base_url))
+    if (source.scheme, source.netloc) != (destination.scheme, destination.netloc):
+        raise HTTPException(status_code=403, detail="已拒绝非同源请求。")
+    if not secrets.compare_digest(
+        request.headers.get("x-releaseguard-csrf", ""), csrf_token
+    ):
+        raise HTTPException(status_code=403, detail="安全令牌无效，请刷新页面后重试。")
+
+
+def _safe_download_part(value: str) -> str:
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", value).strip(" ._")
+    return safe[:80] or "项目"
+
+
+def _format_size(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / 1024 / 1024:.1f} MB"

@@ -9,6 +9,7 @@ from releaseguard_agent.api.ui_routes import LocalWebDependencies
 from releaseguard_agent.llm import LLMResponse
 from releaseguard_agent.services.local_ai_settings import LocalAiSettingsService
 from releaseguard_agent.services.local_run_service import LocalReviewRunService
+from releaseguard_agent.services.storage_audit_service import StorageAuditService
 
 
 SAMPLES = PROJECT_ROOT / "sample_projects"
@@ -158,6 +159,7 @@ def _dependencies(tmp_path: Path, fake: SmartFakeClient) -> LocalWebDependencies
             output_root=tmp_path / "outputs" / "runs",
         ),
         folder_picker=FakeFolderPicker(str(SAMPLES / "clean_python_project")),  # type: ignore[arg-type]
+        storage_audit=StorageAuditService(tmp_path),
     )
 
 
@@ -386,3 +388,149 @@ def test_warning_report_filters_evidence_and_builds_specific_file_actions(
     )[0]
     assert "RG-FLASK" not in evidence_section
     assert "RG-FASTAPI" not in evidence_section
+
+
+def test_history_page_lists_escaped_summaries_and_missing_artifacts(tmp_path: Path) -> None:
+    client, dependencies = _client(tmp_path, SmartFakeClient())
+    run_id = "rg-20260717-100000-abcdef12"
+    directory = dependencies.runs.store.output_root / run_id
+    directory.mkdir(parents=True)
+    (directory / "result.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "project": {"name": "项目 <script>", "path": "E:/中文 项目"},
+                "reviewed_at": "2026-07-17T10:00:00+00:00",
+                "mode": "basic",
+                "mode_label": "基础扫描",
+                "decision": {"state": "warning", "label": "可以发布，但建议先修复"},
+                "summary": {"blocking": 0, "warning": 2, "passed": 5},
+                "ai": {"ai_invoked": False, "api_key": "must-not-appear"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    page = client.get("/history")
+    api = client.get("/api/history")
+
+    assert page.status_code == 200
+    assert "项目 &lt;script&gt;" in page.text
+    assert "项目 <script>" not in page.text
+    assert "该历史记录不完整或已损坏" not in page.text
+    assert "无 Markdown" in page.text
+    assert "must-not-appear" not in page.text
+    assert "must-not-appear" not in api.text
+    assert api.json()["items"][0]["project_path"] == "E:/中文 项目"
+
+
+def test_history_corruption_hide_restore_and_safe_delete(tmp_path: Path) -> None:
+    client, dependencies = _client(tmp_path, SmartFakeClient())
+    valid = client.post(
+        "/api/runs",
+        json={"project_path": str(SAMPLES / "clean_python_project"), "mode": "basic"},
+    ).json()["run_id"]
+    dependencies.runs.wait(valid)
+    damaged = dependencies.runs.store.output_root / "rg-20260717-100001-abcdef13"
+    damaged.mkdir(parents=True)
+    (damaged / "result.json").write_text("{broken", encoding="utf-8")
+    page = client.get("/history")
+    token = page.text.split('data-csrf-token="', 1)[1].split('"', 1)[0]
+    headers = {"Origin": "http://testserver", "X-ReleaseGuard-CSRF": token}
+
+    hidden = client.post(
+        f"/api/history/{valid}/remove",
+        json={"scope": "list_only"},
+        headers=headers,
+    )
+    assert hidden.status_code == 200
+    assert (dependencies.runs.store.output_root / valid).is_dir()
+    assert client.get("/api/history").json()["total"] == 1
+    assert client.get("/api/history?visibility=hidden").json()["total"] == 1
+
+    restored = client.post(
+        f"/api/history/{valid}/restore", json={}, headers=headers
+    )
+    assert restored.status_code == 200
+    assert client.get("/api/history").json()["total"] == 2
+
+    deleted = client.post(
+        f"/api/history/{damaged.name}/remove",
+        json={"scope": "list_and_files"},
+        headers=headers,
+    )
+    assert deleted.status_code == 200
+    assert not damaged.exists()
+    assert (dependencies.runs.store.output_root / valid).is_dir()
+
+
+def test_history_destructive_routes_require_json_same_origin_and_csrf(tmp_path: Path) -> None:
+    client, dependencies = _client(tmp_path, SmartFakeClient())
+    run_id = "rg-20260717-100000-abcdef12"
+    directory = dependencies.runs.store.output_root / run_id
+    directory.mkdir(parents=True)
+    (directory / "result.json").write_text("{}", encoding="utf-8")
+
+    assert client.post(f"/api/history/{run_id}/remove", content="scope=x").status_code == 415
+    assert client.post(f"/api/history/{run_id}/remove", json={"scope": "list_only"}).status_code == 403
+    assert client.post(
+        f"/api/history/{run_id}/remove",
+        json={"scope": "list_only"},
+        headers={"Origin": "https://evil.invalid", "X-ReleaseGuard-CSRF": dependencies.csrf_token},
+    ).status_code == 403
+    assert directory.is_dir()
+
+
+def test_trace_is_loaded_only_by_advanced_endpoint_and_downloads_stay_compatible(tmp_path: Path) -> None:
+    client, dependencies = _client(tmp_path, SmartFakeClient())
+    response = client.post(
+        "/api/runs",
+        json={"project_path": str(SAMPLES / "clean_python_project"), "mode": "basic"},
+    )
+    run_id = response.json()["run_id"]
+    dependencies.runs.wait(run_id)
+
+    page = client.get(f"/runs/{run_id}")
+    trace = client.get(f"/api/runs/{run_id}/trace")
+    fix_plan = client.get(f"/runs/{run_id}/download/fix-plan")
+    persisted = json.loads(
+        (dependencies.runs.store.output_root / run_id / "result.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert page.status_code == 200
+    assert "展开后加载执行轨迹" in page.text
+    assert '"events"' not in page.text
+    assert trace.status_code == 200
+    assert "events" in trace.json()
+    assert "trace" not in persisted
+    assert fix_plan.status_code == 200
+    assert "ReleaseGuard_" in fix_plan.headers["content-disposition"]
+
+
+def test_deleting_latest_makes_next_record_latest(tmp_path: Path) -> None:
+    client, dependencies = _client(tmp_path, SmartFakeClient())
+    run_ids = []
+    for sample in ("clean_python_project", "fastapi_bad_project"):
+        run_id = client.post(
+            "/api/runs",
+            json={"project_path": str(SAMPLES / sample), "mode": "basic"},
+        ).json()["run_id"]
+        dependencies.runs.wait(run_id)
+        run_ids.append(run_id)
+    latest = dependencies.runs.store.latest_run_id()
+    assert latest in run_ids
+    page = client.get("/history")
+    token = page.text.split('data-csrf-token="', 1)[1].split('"', 1)[0]
+    deleted = client.post(
+        f"/api/history/{latest}/remove",
+        json={"scope": "list_and_files"},
+        headers={"Origin": "http://testserver", "X-ReleaseGuard-CSRF": token},
+    )
+
+    assert deleted.status_code == 200
+    remaining = next(item for item in run_ids if item != latest)
+    redirect = client.get("/runs/latest", follow_redirects=False)
+    assert redirect.headers["location"] == f"/runs/{remaining}"

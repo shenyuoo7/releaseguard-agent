@@ -1,3 +1,8 @@
+from releaseguard_agent.services.llm_review_service import (
+    LLMAnalysisUnavailableError,
+    LLMReviewAnalysisResult,
+    LLMReviewService,
+)
 from releaseguard_agent.services.release_review_service import (
     InvalidProjectPathError,
     ReleaseReviewArtifacts,
@@ -11,6 +16,9 @@ from releaseguard_agent.services.release_review_service import (
 
 
 __all__ = (
+    "LLMAnalysisUnavailableError",
+    "LLMReviewAnalysisResult",
+    "LLMReviewService",
     "InvalidProjectPathError",
     "ReleaseReviewArtifacts",
     "ReleaseReviewError",

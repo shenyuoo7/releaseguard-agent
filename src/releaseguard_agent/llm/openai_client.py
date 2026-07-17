@@ -48,6 +48,7 @@ class OpenAIChatCompletionClient:
         project: str | None = None,
         base_url: str | None = None,
         timeout: float | None = None,
+        provider_name: str = "openai",
     ) -> None:
         if client is not None:
             self._client = client
@@ -60,6 +61,7 @@ class OpenAIChatCompletionClient:
                 timeout=timeout,
             )
         self._default_model = model
+        self._provider_name = provider_name
 
     def complete(
         self,
@@ -119,7 +121,7 @@ class OpenAIChatCompletionClient:
 
         return LLMResponse(
             content=content,
-            provider="openai",
+            provider=self._provider_name,
             model=getattr(completion, "model", selected_model),
             finish_reason=getattr(choice, "finish_reason", None),
             usage=_dump_mapping(getattr(completion, "usage", None)),

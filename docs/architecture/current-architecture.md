@@ -351,6 +351,13 @@ Current responsibilities:
 The Agent layer explains the release state, but it does not invent a separate
 release-blocking policy. It reuses `CheckResult.should_block_release`.
 
+M3 adds an optional CLI-only LLM extension. `llm/factory.py` reads an injected
+environment mapping, defaults to deterministic mode, and constructs
+`OpenAIChatCompletionClient` only for an explicit compatible provider with a
+model and key. `LLMReviewService` consumes the already completed
+`ReleaseReviewResult`; it never reruns Checkers and cannot replace the
+deterministic decision.
+
 ## Report and checklist layer
 
 Important files:
@@ -578,7 +585,7 @@ This gives the project a working phase-one release-review pipeline while
 keeping the architecture open for future API, plugin, persistence, and richer
 RAG/LLM capabilities.
 
-Separately, a provider-neutral LLM boundary, fake client, standalone risk
-analysis Agent/service, and OpenAI-compatible adapter are available for
-offline-tested development. They are not part of the CLI flow shown above and
-do not establish production LLM integration by themselves.
+A provider-neutral LLM boundary, fake client, risk-analysis Agent, provider
+factory, and OpenAI-compatible adapter are reachable through the explicit CLI
+LLM-output flag. Without that flag and complete configuration, the product
+remains deterministic and offline.

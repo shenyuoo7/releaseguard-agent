@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import TextIO
@@ -8,8 +9,13 @@ from releaseguard_agent.core.default_checkers import (
     get_default_python_checker_names,
 )
 from releaseguard_agent.models.check_result import CheckResult
+from releaseguard_agent.llm import (
+    LLMProviderConfigurationError,
+    build_llm_runtime,
+)
 from releaseguard_agent.services import (
     InvalidProjectPathError,
+    LLMReviewService,
     ReleaseReviewService,
     ReviewArtifactError,
 )
@@ -74,6 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Write trace.json to this directory.",
     )
+    check_parser.add_argument(
+        "--llm-analysis-output-dir",
+        default=None,
+        help=(
+            "Optionally write LLM risk analysis/fix artifacts. Requires "
+            "explicit RELEASEGUARD_LLM_* provider configuration."
+        ),
+    )
     check_parser.set_defaults(handler=run_check_command)
 
     list_parser = subparsers.add_parser(
@@ -111,6 +125,23 @@ def run_check_command(args: argparse.Namespace) -> int:
     payload = review_result.report_payload
     results = list(review_result.check_results)
     summary = review_result.summary
+
+    if args.llm_analysis_output_dir is not None:
+        try:
+            runtime = build_llm_runtime(os.environ)
+            LLMReviewService(runtime).analyze(
+                review=review_result,
+                output_dir=Path(args.llm_analysis_output_dir),
+            )
+        except (
+            LLMProviderConfigurationError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            _print_error(str(exc))
+            return EXIT_USAGE_ERROR
 
     if args.output_format == "json":
         print(json.dumps(payload, indent=2))
@@ -180,6 +211,11 @@ def _build_check_trace_command_args(
                 "--trace-output-dir",
                 str(args.trace_output_dir),
             ]
+        )
+
+    if args.llm_analysis_output_dir is not None:
+        command_args.extend(
+            ["--llm-analysis-output-dir", str(args.llm_analysis_output_dir)]
         )
 
     return command_args

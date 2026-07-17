@@ -15,7 +15,8 @@ Phase 1 focuses on Python projects, including:
 
 The CLI and synchronous FastAPI app are current product entry points. Both use
 `ReleaseReviewService`. Standalone LLM analysis code and an OpenAI-compatible
-provider adapter exist, but neither is connected to these product flows.
+provider adapter are available through an explicit optional CLI flag; normal
+CLI/API reviews remain deterministic and offline.
 
 ## What it checks today
 

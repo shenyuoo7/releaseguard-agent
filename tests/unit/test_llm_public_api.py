@@ -1,17 +1,25 @@
 import releaseguard_agent.llm as llm
 from releaseguard_agent.llm import (
+    API_KEY_ENV,
+    BASE_URL_ENV,
     LLM_MESSAGE_ROLES,
     FakeLLMClient,
     LLMCall,
     LLMClient,
     LLMMessage,
     LLMResponse,
+    LLMProviderConfigurationError,
+    LLMRuntime,
+    MODEL_ENV,
     MissingFakeLLMResponseError,
     OpenAIChatCompletionClient,
     OpenAIClientConfigurationError,
     OpenAIClientDependencyError,
     OpenAIClientRequestError,
     OpenAIClientResponseError,
+    PROVIDER_ENV,
+    TIMEOUT_ENV,
+    build_llm_runtime,
 )
 
 
@@ -47,20 +55,38 @@ def test_llm_public_api_exports_provider_abstraction_helpers() -> None:
     assert OpenAIClientResponseError.__name__ == (
         "OpenAIClientResponseError"
     )
+    assert API_KEY_ENV == "RELEASEGUARD_LLM_API_KEY"
+    assert BASE_URL_ENV == "RELEASEGUARD_LLM_BASE_URL"
+    assert MODEL_ENV == "RELEASEGUARD_LLM_MODEL"
+    assert PROVIDER_ENV == "RELEASEGUARD_LLM_PROVIDER"
+    assert TIMEOUT_ENV == "RELEASEGUARD_LLM_TIMEOUT"
+    assert LLMProviderConfigurationError.__name__ == (
+        "LLMProviderConfigurationError"
+    )
+    assert LLMRuntime.__name__ == "LLMRuntime"
+    assert callable(build_llm_runtime)
 
 
 def test_llm_public_api_defines_explicit_all() -> None:
     assert llm.__all__ == [
         "LLM_MESSAGE_ROLES",
+        "API_KEY_ENV",
+        "BASE_URL_ENV",
         "FakeLLMClient",
         "LLMCall",
         "LLMClient",
         "LLMMessage",
         "LLMResponse",
+        "LLMProviderConfigurationError",
+        "LLMRuntime",
+        "MODEL_ENV",
         "MissingFakeLLMResponseError",
         "OpenAIChatCompletionClient",
         "OpenAIClientConfigurationError",
         "OpenAIClientDependencyError",
         "OpenAIClientRequestError",
         "OpenAIClientResponseError",
+        "PROVIDER_ENV",
+        "TIMEOUT_ENV",
+        "build_llm_runtime",
     ]

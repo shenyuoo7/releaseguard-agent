@@ -300,3 +300,22 @@ Check whitespace before commit:
 ```powershell
 git diff --check
 ```
+## Optional OpenAI-compatible analysis
+
+Normal CLI use is deterministic and does not inspect provider configuration.
+To explicitly request LLM risk-analysis and fix-plan artifacts, configure these
+process environment names securely and add `--llm-analysis-output-dir`:
+
+- `RELEASEGUARD_LLM_PROVIDER` (`openai` or `openai-compatible`)
+- `RELEASEGUARD_LLM_MODEL`
+- `RELEASEGUARD_LLM_API_KEY`
+- optional `RELEASEGUARD_LLM_BASE_URL`
+- optional `RELEASEGUARD_LLM_TIMEOUT`
+
+```powershell
+.\.venv\Scripts\python.exe -m releaseguard_agent.cli.main check sample_projects\clean_python_project --skip-pytest-execution --llm-analysis-output-dir outputs\demo-llm
+```
+
+Do not put credentials in commands, committed files, logs, or screenshots.
+When the key is absent, ReleaseGuard stays in deterministic mode and does not
+construct or call the SDK client.

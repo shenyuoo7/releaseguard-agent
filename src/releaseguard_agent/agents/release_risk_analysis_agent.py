@@ -175,7 +175,11 @@ def _build_prompt_messages(
 ) -> tuple[LLMMessage, ...]:
     payload = {
         "schema_version": RELEASE_RISK_ANALYSIS_SCHEMA_VERSION,
-        "task": "Analyze release risk and produce a prioritized fix plan.",
+        "task": (
+            "Analyze release readiness and produce a prioritized manual plan. "
+            "For a clean project, summarize verified strengths, non-blocking "
+            "cautions, and release-before recommendations without inventing findings."
+        ),
         "deterministic_context": context.to_dict(),
         "response_schema": {
             "risk_level": "low | medium | high | critical",
@@ -233,6 +237,8 @@ Rules:
 - If your release_status or release_allowed differs from the deterministic
   decision, the deterministic decision remains authoritative.
 - Prioritize fixes that unblock release first.
+- For a clean project, explain verified strengths and cautious pre-release
+  recommendations; never invent a failed check.
 """
 
 

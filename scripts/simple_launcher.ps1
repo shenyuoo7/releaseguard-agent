@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [ValidateSet('Menu', 'Check', 'Web', 'Verify', 'Demo', 'RepairEnvironment', 'Serve')]
-    [string]$Action = 'Menu',
+    [string]$Action = 'Web',
     [string]$ProjectPath,
     [string]$BeforePath,
     [string]$AfterPath,
@@ -60,7 +60,7 @@ function Initialize-ReleaseGuardEnvironment {
 
 function Assert-ReleaseGuardPython {
     if (-not (Test-Path -LiteralPath $script:PythonPath -PathType Leaf)) {
-        throw "找不到项目虚拟环境：$script:PythonPath`n请返回主菜单选择 5 安装或修复运行环境。"
+        throw "找不到项目虚拟环境：$script:PythonPath`n请运行 ReleaseGuard.bat -Action RepairEnvironment 安装或修复运行环境。"
     }
 }
 
@@ -255,14 +255,14 @@ function Start-ReleaseGuardWeb {
     $existingHealth = Get-ReleaseGuardHealth -HealthPort $WebPort
     if ($null -ne $existingHealth) {
         if (-not $SkipBrowser) {
-            Start-Process "http://127.0.0.1:$WebPort/docs"
+            Start-Process "http://127.0.0.1:$WebPort/"
         }
         return [pscustomobject]@{
             action = 'web'
             project_root = $script:ProjectRoot
             runtime_root = $script:RuntimeRoot
             status = 'already_running'
-            url = "http://127.0.0.1:$WebPort/docs"
+            url = "http://127.0.0.1:$WebPort/"
             health = 'ok'
         }
     }
@@ -298,14 +298,14 @@ function Start-ReleaseGuardWeb {
             throw '网页服务在 30 秒内未通过健康检查。'
         }
         if (-not $SkipBrowser) {
-            Start-Process "http://127.0.0.1:$WebPort/docs"
+            Start-Process "http://127.0.0.1:$WebPort/"
         }
         return [pscustomobject]@{
             action = 'web'
             project_root = $script:ProjectRoot
             runtime_root = $script:RuntimeRoot
             status = 'started'
-            url = "http://127.0.0.1:$WebPort/docs"
+            url = "http://127.0.0.1:$WebPort/"
             health = [string]$health.status
             process_id = $process.Id
         }
@@ -425,10 +425,10 @@ function Write-ActionResult {
         }
         'web' {
             Write-Host ''
-            Write-Host '网页界面已启动。'
+            Write-Host 'ReleaseGuard AI 发布审查已启动。'
             Write-Host "地址：$($Result.url)"
             if ($Result.status -eq 'started' -and -not $TestMode) {
-                Write-Host '关闭新打开的服务窗口即可停止服务。'
+                Write-Host '浏览器将自动打开；关闭新打开的服务窗口即可停止服务。'
             }
         }
         'demo' {

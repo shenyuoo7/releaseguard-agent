@@ -2,6 +2,8 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from releaseguard_agent.api.errors import ApiError, install_error_handlers
 from releaseguard_agent.api.path_policy import (
@@ -17,6 +19,13 @@ from releaseguard_agent.api.schemas import (
     ReviewSummary,
     VerificationRequest,
     VerificationResponse,
+)
+from releaseguard_agent.api.ui_routes import (
+    LocalWebDependencies,
+    build_local_web_dependencies,
+    build_ui_router,
+    static_directory,
+    template_directory,
 )
 from releaseguard_agent.services import (
     InvalidProjectPathError,
@@ -36,13 +45,14 @@ def create_app(
     review_service: ReleaseReviewService | None = None,
     verification_service: ReleaseVerificationService | None = None,
     allowed_project_roots: Iterable[Path] | None = None,
+    local_web_dependencies: LocalWebDependencies | None = None,
 ) -> FastAPI:
     """Build the synchronous ReleaseGuard API with explicit dependencies."""
     application = FastAPI(
         title="ReleaseGuard Agent API",
         version="0.3.0",
         description=(
-            "Synchronous local API for deterministic pre-release reviews."
+            "Local API and browser UI for deterministic and AI-assisted reviews."
         ),
     )
     service = review_service or ReleaseReviewService()
@@ -53,6 +63,15 @@ def create_app(
         allowed_project_roots or (PROJECT_ROOT,)
     )
     install_error_handlers(application)
+    web_dependencies = local_web_dependencies or build_local_web_dependencies(
+        PROJECT_ROOT
+    )
+    templates = Jinja2Templates(directory=str(template_directory()))
+    application.mount(
+        "/static",
+        StaticFiles(directory=str(static_directory())),
+        name="static",
+    )
 
     @application.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
@@ -146,6 +165,7 @@ def create_app(
             ),
         )
 
+    application.include_router(build_ui_router(web_dependencies, templates))
     return application
 
 

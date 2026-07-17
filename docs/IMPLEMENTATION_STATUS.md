@@ -1,6 +1,6 @@
 # ReleaseGuard Agent Implementation Status
 
-Last verified: 2026-07-17 (final launcher closeout)
+Last verified: 2026-07-17 (local AI Web product entry)
 
 This page is the evidence-backed status of the local repository. A directory,
 class name, roadmap item, or resume keyword is not treated as implemented
@@ -8,13 +8,21 @@ unless reachable code and tests support it.
 
 ## Current product boundary
 
-The current product entry points are the CLI and a synchronous FastAPI app:
+The primary product entry is now the local browser UI started by double-clicking
+`ReleaseGuard.bat`. The CLI and synchronous API remain advanced interfaces:
 
 ```powershell
 $env:PYTHONPATH = "src"
 .\.venv\Scripts\python.exe -m releaseguard_agent.cli.main
 .\.venv\Scripts\python.exe -m uvicorn releaseguard_agent.api.app:app --host 127.0.0.1 --port 8000
 ```
+
+The homepage at `/` separates deterministic basic scanning from AI review.
+Provider settings and API credentials are configured at `/settings/ai`; keys
+remain process-memory-only by default or use Windows current-user encryption.
+Real network access occurs only when the user explicitly tests a connection or
+runs AI review after that test succeeds. Results render in the browser and are
+persisted under `outputs/runs/{run_id}/` without a database.
 
 The CLI delegates its business workflow to `ReleaseReviewService`. The service
 runs deterministic checkers once, builds `CheckResult` records, applies the
@@ -57,7 +65,7 @@ still insufficient, and route LLM failures through a deterministic fallback.
 | Optional LLM risk analysis | COMPLETE | CLI can enrich an existing deterministic review through `LLMReviewService`; FakeLLM covers the product path offline and deterministic facts remain authoritative. |
 | OpenAI-compatible adapter | COMPLETE | Explicit provider/model/base URL/timeout environment configuration builds the lazy SDK adapter; missing key falls back to deterministic mode and errors are sanitized. Real network interoperability is optional and not asserted by offline tests. |
 | Trace | COMPLETE | Existing run traces remain available; Agent and verification flows additionally record redacted node/tool/retrieval/LLM events, route history, provenance IDs, latency, optional token usage, artifacts, errors, and before/after deltas. |
-| Unit and integration tests | COMPLETE | 318 unit tests and 27 CLI/API/launcher integration tests pass at final launcher closeout. |
+| Unit and integration tests | COMPLETE | 326 unit tests and 35 CLI/API/launcher/Web integration tests pass at the local AI Web checkpoint. |
 | E2E and eval system | COMPLETE | A real Uvicorn health smoke test and a fixed offline golden-case eval cover six required metrics. FakeLLM/fixed embeddings prove repeatability and wiring, not provider or semantic quality. |
 | FastAPI product API | COMPLETE | `GET /health`, `POST /reviews`, and `POST /verifications` are real synchronous routes with strict schemas, safe path policy, uniform errors, TestClient integration, and Uvicorn health smoke coverage. |
 | Agent tools and LangGraph | COMPLETE | Reachable tool wrappers are called by a typed `StateGraph`; the graph has normal and conditional edges, is compiled, invoked by a service and CLI, and has four distinct tested routes. |
@@ -65,12 +73,13 @@ still insufficient, and route LLM failures through a deterministic fallback.
 | User-applied-fix verification | COMPLETE | CLI/API call `ReleaseVerificationService`, scan separate before/after snapshots, run the Verifier Agent, report resolved/new/unchanged, and use the after scan for the final decision. No repository is modified. |
 | Docker packaging | COMPLETE | The non-root demo image builds on Docker Desktop/Linux, serves all three API endpoints, runs as UID 10001, and reaches Docker health `healthy`. It remains a demo image, not an untrusted-code sandbox. |
 | GitHub Actions | COMPLETE | Push run #1 for `yin/releaseguard-complete` completed successfully on Ubuntu: quality/tests/Eval and container smoke both passed. |
-| Windows one-click entry | COMPLETE | Root `ReleaseGuard.bat` opens the tested Chinese PowerShell menu for review, local API docs, before/after verification, demos, and environment repair. Core operations call existing CLI/API boundaries. |
+| Windows one-click entry | COMPLETE | Root `ReleaseGuard.bat` starts Uvicorn on `127.0.0.1`, waits for health, and opens the user homepage. The old menu remains an explicit compatibility action. |
+| Local AI Web experience | COMPLETE | Jinja2/native HTML/CSS/JS pages provide provider configuration, native Windows folder selection with text fallback, background progress, basic/AI mode separation, browser-native result presentation, downloads, and persisted last-run access. Real AI state is never inferred from FakeLLM or deterministic fallback. |
 
 ## Current main flow
 
 ```text
-CLI or POST /reviews
+Browser basic mode, CLI, or POST /reviews
 -> ReleaseReviewService
 -> default checker composition
 -> CheckerRunner
@@ -80,6 +89,22 @@ CLI or POST /reviews
 -> optional report/checklist/advice/trace writers
 -> optional configured LLMReviewService analysis (CLI flag only)
 ```
+
+The Web AI flow is:
+
+```text
+ReleaseGuard.bat -> GET /
+-> tested LocalAiSettingsService runtime
+-> LocalReviewRunService background run
+-> ReleaseAgentWorkflowService -> compiled StateGraph
+-> scan -> evidence -> risk (real LLM) -> fix planner
+-> deterministic final decision
+-> outputs/runs/{run_id} -> browser result page
+```
+
+Clean projects use `force_ai_review=True` only when the user explicitly selects
+AI mode, so they receive one grounded release-readiness summary. Basic mode and
+legacy graph calls retain the clean-path LLM skip.
 
 The standalone `search-rules` CLI reaches exact/BM25/vector/hybrid retrieval.
 The LLM risk-analysis service is still outside the default review flow.
@@ -250,15 +275,30 @@ Final one-click launcher closeout verification:
 | Docker build/runtime | Passed: Linux engine, health `healthy`, UID 10001, clean HTTP review allowed |
 | Remote GitHub Actions baseline | Run #1 on commit `469dc48` succeeded; both jobs green |
 
+Local AI Web product verification:
+
+| Suite/check | Result |
+| --- | --- |
+| Web/AI/launcher focused selection | 29 passed |
+| `tests/unit` | 326 passed |
+| `tests/integration` | 35 passed |
+| `tests/e2e` | 1 passed, including real Uvicorn homepage |
+| Full suite | 362 passed |
+| Ruff | Passed |
+| Mypy | 83 source files, no issues |
+| Docker build/runtime | Passed: Web image, homepage, health, offline UI review, four artifacts, UID 10001, health `healthy` |
+| Real provider request | Not run automatically; only the user-facing “测试连接” action may initiate it |
+
 ## Known risks
 
-- The declared OpenAI SDK is installed in the project `.venv`, but installing
-  the adapter dependency does not mean provider configuration or product
-  integration is complete.
+- The OpenAI-compatible adapter is integrated into explicit Web AI reviews,
+  but a real provider connection and answer quality remain user-initiated and
+  unverified until the user completes the in-page connection test.
 - The API defaults to reviewing paths under the repository root. Other trusted
   roots require explicit `create_app(allowed_project_roots=...)` configuration.
-- Verification is synchronous and stateless: callers must preserve and submit
-  both baseline and modified snapshots; ReleaseGuard does not persist runs.
+- The legacy verification API is synchronous and stateless: callers must
+  preserve and submit both snapshots. Browser review runs are persisted as
+  files under `outputs/runs/`, without a database.
 - Real OpenAI-compatible network execution remains unverified and must be
   explicit and opt-in; offline FakeLLM/fake-SDK tests do not establish provider
   availability or semantic answer quality.
@@ -277,7 +317,8 @@ Final one-click launcher closeout verification:
   a learned cross-encoder.
 - The golden eval is intentionally small. A perfect score on its fixed cases
   does not establish broad retrieval, LLM, or production embedding quality.
-- There is no coverage percentage or remote Linux CI result.
+- There is no coverage percentage. The previous checkpoint passed remote Linux
+  CI; the current Web checkpoint still requires its post-push Actions result.
 - Docker has been validated locally on Docker Desktop/Linux. This does not
   establish behavior on every Docker Engine version or provide untrusted-code
   isolation.

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}ReleaseGuard AI 发布审查{% endblock %}
+{% block content %}
+<section class="hero">
+  <p class="eyebrow">LOCAL RELEASE INTELLIGENCE</p>
+  <h1>ReleaseGuard AI 发布审查</h1>
+  <p class="lead">选择项目，用确定性检查守住事实，再让真实模型解释风险和生成修复计划。</p>
+</section>
+
+<section class="panel review-panel" id="review-panel">
+  <div class="row status-row">
+    <div>
+      <span class="label">AI 连接状态</span>
+      <strong id="ai-status" class="status status-{{ ai_status.status }}">
+        {% if ai_status.status == 'connected' %}连接成功
+        {% elif ai_status.status == 'failed' %}连接失败
+        {% elif ai_status.status == 'untested' %}已配置，尚未测试
+        {% else %}未配置{% endif %}
+      </strong>
+      {% if ai_status.status == 'connected' %}
+      <small>{{ ai_status.provider_label }} · {{ ai_status.model }}</small>
+      {% endif %}
+    </div>
+    <a class="button secondary" href="/settings/ai">配置 AI</a>
+  </div>
+
+  <div class="row project-row">
+    <div>
+      <span class="label">项目</span>
+      <strong id="project-name">尚未选择</strong>
+      <small id="project-detail">支持中文和带空格的路径</small>
+    </div>
+    <button class="button secondary" id="choose-project" type="button">选择项目文件夹</button>
+  </div>
+
+  <details class="path-fallback">
+    <summary>文件夹窗口无法使用？改为输入路径</summary>
+    <div class="inline-form">
+      <input id="project-path-input" type="text" placeholder="例如 E:\项目\my-app" autocomplete="off">
+      <button class="button ghost" id="use-project-path" type="button">使用此路径</button>
+    </div>
+  </details>
+
+  <fieldset class="mode-picker">
+    <legend>审查模式</legend>
+    <label><input type="radio" name="review-mode" value="basic"> 基础扫描 <small>不调用大模型</small></label>
+    <label><input type="radio" name="review-mode" value="ai" checked> AI 智能审查 <small>调用已测试的真实模型</small></label>
+  </fieldset>
+
+  <div id="home-message" class="message" hidden></div>
+  <button class="button primary large" id="start-review" type="button">开始审查</button>
+  <div class="secondary-actions">
+    {% if latest_run_id %}<a href="/runs/{{ latest_run_id }}">查看上一次结果</a>{% else %}<span class="muted">还没有历史结果</span>{% endif %}
+  </div>
+</section>
+
+<section class="demo-panel">
+  <div>
+    <h2>想先看效果？</h2>
+    <p>使用内置的阻断示例，不会修改你的项目。</p>
+  </div>
+  <div class="demo-actions">
+    <button class="button primary" id="run-ai-demo" type="button">运行 AI 演示</button>
+    <button class="button secondary" id="run-basic-demo" type="button">运行离线基础演示</button>
+  </div>
+</section>
+{% endblock %}

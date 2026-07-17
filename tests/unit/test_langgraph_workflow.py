@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from releaseguard_agent.agent_tools import (
@@ -7,7 +8,7 @@ from releaseguard_agent.agent_tools import (
     RiskAnalysisTool,
     ScanProjectTool,
 )
-from releaseguard_agent.llm import FakeLLMClient, LLMRuntime
+from releaseguard_agent.llm import FakeLLMClient, LLMResponse, LLMRuntime
 from releaseguard_agent.rag import (
     RetrievalResult,
     RuleRetrievalService,
@@ -33,6 +34,49 @@ def test_clean_path_skips_retrieval_risk_and_fix_nodes() -> None:
     assert result.state["route_history"] == ["scan", "finalize_clean"]
     assert result.state["fix_plan"] == ()
     assert result.state["llm_attempted"] is False
+
+
+def test_clean_ai_path_runs_evidence_and_real_risk_node() -> None:
+    class GroundedClient:
+        def complete(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            payload = json.loads(messages[-1].content)
+            context = payload["deterministic_context"]
+            evidence_ids = [
+                item["evidence_id"] for item in context["retrieval_evidence"]
+            ]
+            return LLMResponse(
+                content=json.dumps(
+                    {
+                        "risk_level": "low",
+                        "summary": "项目通过确定性检查，仍建议发布前复核配置。",
+                        "release_status": "ready",
+                        "release_allowed": True,
+                        "prioritized_risks": [],
+                        "fix_plan": [],
+                        "evidence_rule_ids": [],
+                        "evidence_ids": evidence_ids,
+                        "unsupported_claims": [],
+                        "missing_evidence_notes": [],
+                    }
+                )
+            )
+
+    runtime = LLMRuntime("llm", "fake", "fake-model", GroundedClient())
+    result = ReleaseAgentWorkflowService(llm_runtime=runtime).run(
+        project_path=SAMPLES / "clean_python_project",
+        include_pytest_execution=False,
+        force_ai_review=True,
+    )
+
+    assert result.release_allowed is True
+    assert result.state["llm_attempted"] is True
+    assert result.state["llm_failed"] is False
+    assert result.state["route_history"] == [
+        "scan",
+        "evidence_agent",
+        "risk_agent",
+        "fix_planner_agent",
+    ]
 
 
 def test_blocking_path_runs_evidence_risk_and_fix_nodes() -> None:

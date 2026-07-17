@@ -15,6 +15,8 @@ COPY --chown=releaseguard:releaseguard src ./src
 COPY --chown=releaseguard:releaseguard knowledge_base ./knowledge_base
 COPY --chown=releaseguard:releaseguard sample_projects ./sample_projects
 COPY --chown=releaseguard:releaseguard evals ./evals
+RUN mkdir -p /app/.runtime /app/outputs/runs \
+    && chown -R releaseguard:releaseguard /app/.runtime /app/outputs
 
 USER releaseguard
 

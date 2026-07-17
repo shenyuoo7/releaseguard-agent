@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}ReleaseGuard{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/releaseguard.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">ReleaseGuard</a>
+    <span class="subtitle">本地发布审查</span>
+    <a class="developer-link" href="/docs">开发者 API</a>
+  </header>
+  <main class="page">{% block content %}{% endblock %}</main>
+  <script src="{{ url_for('static', path='/releaseguard.js') }}" defer></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

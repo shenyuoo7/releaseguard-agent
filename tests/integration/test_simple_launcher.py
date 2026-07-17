@@ -170,6 +170,16 @@ def test_launcher_starts_web_health_and_stops_its_test_process(tmp_path: Path) -
     result = _json_result(completed)
     assert result["status"] == "started"
     assert result["health"] == "ok"
+    assert result["url"] == f"http://127.0.0.1:{port}/"
+
+
+def test_launcher_defaults_to_the_local_web_product() -> None:
+    source = (PROJECT_ROOT / "scripts" / "simple_launcher.ps1").read_text(
+        encoding="utf-8-sig"
+    )
+
+    assert "[string]$Action = 'Web'" in source
+    assert 'Start-Process "http://127.0.0.1:$WebPort/"' in source
 
 
 def test_launcher_menu_exits_normally() -> None:

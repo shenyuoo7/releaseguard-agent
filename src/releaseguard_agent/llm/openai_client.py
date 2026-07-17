@@ -49,6 +49,7 @@ class OpenAIChatCompletionClient:
         base_url: str | None = None,
         timeout: float | None = None,
         provider_name: str = "openai",
+        include_metadata: bool = True,
     ) -> None:
         if client is not None:
             self._client = client
@@ -62,6 +63,7 @@ class OpenAIChatCompletionClient:
             )
         self._default_model = model
         self._provider_name = provider_name
+        self._include_metadata = include_metadata
 
     def complete(
         self,
@@ -96,7 +98,7 @@ class OpenAIChatCompletionClient:
         if openai_response_format is not None:
             request["response_format"] = openai_response_format
 
-        if metadata:
+        if metadata and self._include_metadata:
             request["metadata"] = {
                 str(key): str(value)
                 for key, value in dict(metadata).items()

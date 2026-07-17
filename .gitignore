@@ -16,6 +16,7 @@ outputs/logs/*
 outputs/latest_review/
 outputs/latest_verification/
 outputs/latest_demo/
+outputs/runs/
 !outputs/reports/.gitkeep
 !outputs/history/.gitkeep
 !outputs/traces/.gitkeep

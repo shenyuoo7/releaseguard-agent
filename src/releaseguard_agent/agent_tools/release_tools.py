@@ -6,7 +6,7 @@ from releaseguard_agent.agents.release_risk_analysis_agent import (
     ReleaseRiskAnalysisAgent,
     ReleaseRiskAnalysisContext,
 )
-from releaseguard_agent.llm import LLMRuntime
+from releaseguard_agent.llm import LLMRuntime, OpenAIClientRequestError
 from releaseguard_agent.models.retrieval_evidence import RetrievalEvidence
 from releaseguard_agent.observability import ExecutionTracer
 from releaseguard_agent.rag import RetrievalResult, RuleRetrievalService
@@ -166,7 +166,7 @@ class RiskAnalysisTool:
                 payload=_deterministic_risk_payload(review, evidence),
                 llm_attempted=True,
                 llm_failed=True,
-                error_type=type(exc).__name__,
+                error_type=_llm_error_type(exc),
             )
         payload = result.analysis.to_dict()
         payload["analysis_source"] = "llm"
@@ -252,3 +252,17 @@ def _deterministic_risk_payload(
         "evidence_ids": [item.evidence_id for item in evidence],
         "fix_plan": [],
     }
+
+
+def _llm_error_type(exc: Exception) -> str:
+    if not isinstance(exc, OpenAIClientRequestError):
+        return type(exc).__name__
+    if exc.status_code in {401, 403}:
+        return "authentication_failed"
+    if exc.status_code == 404:
+        return "model_or_url_not_found"
+    if exc.status_code == 429:
+        return "rate_limited"
+    if "timeout" in exc.error_type.lower():
+        return "timeout"
+    return "provider_error"

@@ -61,6 +61,7 @@ class ReleaseAgentWorkflowService:
         retrieval_mode: str = "hybrid",
         top_k: int = 5,
         minimum_evidence: int = 1,
+        force_ai_review: bool = False,
         baseline_review: ReleaseReviewResult | None = None,
         tracer: ExecutionTracer | None = None,
         trace_output_dir: Path | None = None,
@@ -73,6 +74,7 @@ class ReleaseAgentWorkflowService:
             "top_k": top_k,
             "minimum_evidence": minimum_evidence,
             "route_history": [],
+            "force_ai_review": force_ai_review,
         }
         if baseline_review is not None:
             initial["baseline_review"] = baseline_review

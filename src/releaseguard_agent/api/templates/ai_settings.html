@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}配置 AI · ReleaseGuard{% endblock %}
+{% block content %}
+<section class="narrow">
+  <a class="back-link" href="/">← 返回审查首页</a>
+  <h1>配置真实 AI</h1>
+  <p class="lead small">只有点击“测试连接”时才会发起网络请求。API Key 不会写入报告、Trace 或 Git 文件。</p>
+
+  <section class="panel settings-panel">
+    <label>Provider
+      <select id="provider">
+        {% for key, preset in presets.items() %}
+        <option value="{{ key }}" data-base-url="{{ preset.base_url }}" data-model="{{ preset.model }}" {% if ai_status.provider == key %}selected{% endif %}>{{ preset.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Base URL
+      <input id="base-url" type="url" value="{{ ai_status.base_url }}" autocomplete="off">
+    </label>
+    <label>Model
+      <input id="model" type="text" value="{{ ai_status.model }}" autocomplete="off">
+    </label>
+    <label>API Key
+      <input id="api-key" type="password" value="" placeholder="不会回显已保存的 Key" autocomplete="new-password">
+    </label>
+    <fieldset class="storage-picker">
+      <legend>保存方式</legend>
+      <label><input type="radio" name="storage" value="session" {% if not ai_status.remember_device %}checked{% endif %}> 仅本次使用（进程内存）</label>
+      <label><input type="radio" name="storage" value="device" {% if ai_status.remember_device %}checked{% endif %}> 记住此设备（Windows 当前用户加密）</label>
+    </fieldset>
+    <div id="settings-message" class="message" hidden></div>
+    <div class="button-row">
+      <button class="button primary" id="test-ai" type="button">测试连接</button>
+      <button class="button secondary" id="save-ai" type="button">保存设置</button>
+    </div>
+  </section>
+</section>
+{% endblock %}

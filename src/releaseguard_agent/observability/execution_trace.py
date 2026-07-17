@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Iterator
 
 
@@ -38,11 +39,17 @@ class ExecutionTraceArtifacts:
 class ExecutionTracer:
     """Thread-safe, redacting event recorder for one workflow run."""
 
-    def __init__(self, run_id: str | None = None) -> None:
+    def __init__(
+        self,
+        run_id: str | None = None,
+        *,
+        event_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         self.run_id = run_id or f"rg-{uuid.uuid4()}"
         self.started_at = _utc_now()
         self._events: list[dict[str, Any]] = []
         self._lock = threading.Lock()
+        self._event_callback = event_callback
 
     @contextmanager
     def span(
@@ -77,14 +84,15 @@ class ExecutionTracer:
                 "error_type": error_type,
                 **span.details,
             }
+            redacted = _redact(event)
             with self._lock:
-                self._events.append(_redact(event))
+                self._events.append(redacted)
+            if self._event_callback is not None:
+                self._event_callback(dict(redacted))
 
     def route(self, source: str, destination: str) -> None:
         now = _utc_now()
-        with self._lock:
-            self._events.append(
-                {
+        event = {
                     "event_id": f"evt-{uuid.uuid4()}",
                     "kind": "route",
                     "node": source,
@@ -96,7 +104,10 @@ class ExecutionTracer:
                     "route": destination,
                     "error_type": None,
                 }
-            )
+        with self._lock:
+            self._events.append(event)
+        if self._event_callback is not None:
+            self._event_callback(dict(event))
 
     def to_dict(
         self,

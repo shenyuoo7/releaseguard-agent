@@ -9,14 +9,13 @@ machine-readable artifacts for review.
 
 ## 最简单使用方式
 
-Windows 用户日常只需双击项目根目录的 `ReleaseGuard.bat`，然后从中文
-菜单选择检查项目、启动网页、修复前后对比或自带演示。第一次使用选择
-“安装或修复运行环境”。详见 [极简使用说明](docs/SIMPLE_USAGE.md)。
+Windows 用户双击项目根目录的 `ReleaseGuard.bat`。程序会启动仅监听
+`127.0.0.1` 的本地服务并自动打开浏览器首页。基础扫描无需 API Key；选择
+“AI 智能审查”前，必须在页面中配置 Provider、Model 和 API Key，并成功完成
+一次用户主动触发的真实连接测试。核心结果直接显示在浏览器中。
 
-菜单默认执行确定性离线检查，因此不需要 API Key。真实 LLM Agent 分析
-并非“无 Key 也能联网”：它需要安全配置 OpenAI-compatible Provider、
-模型和 `RELEASEGUARD_LLM_API_KEY`，再通过显式 LLM 选项启用。默认菜单
-不会读取 `.env`，也不会把离线规则检查描述成真实模型调用。
+旧中文命令行菜单仍可通过 `ReleaseGuard.bat -Action Menu` 使用，但它是兼容入口，
+不是普通用户的默认体验。Swagger 保留在 `/docs` 供开发者使用。
 
 Phase 1 focuses on Python projects, including:
 
@@ -24,10 +23,10 @@ Phase 1 focuses on Python projects, including:
 - `fastapi`
 - `flask`
 
-The Windows menu, CLI, and synchronous FastAPI app are product entry points.
-They reuse the same service/workflow boundaries. An OpenAI-compatible provider
-is explicit opt-in; normal reviews, graph execution, and the golden eval work
-without credentials or network access.
+The local browser UI is the primary product entry point. The CLI, compatibility
+menu, and synchronous API remain available for advanced use. Basic scans call
+the deterministic service; AI reviews call the role-based Agent workflow only
+after a real provider connection test succeeds.
 
 ## What it checks today
 
@@ -67,9 +66,9 @@ A full CLI run can generate the following files:
 .\ReleaseGuard.bat -Action Check -ProjectPath sample_projects\clean_python_project -NoPause
 ```
 
-`ReleaseGuard.bat` without arguments opens the menu. Its PowerShell launcher
-sets the project environment and calls the existing CLI/API entry points; it
-does not duplicate release-review business logic.
+`ReleaseGuard.bat` without arguments opens the local browser product. Its
+PowerShell launcher sets the project environment, starts Uvicorn on loopback,
+waits for `/health`, and opens `/`. It does not duplicate review business logic.
 
 The equivalent direct Python command is:
 

@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}审查结果 · ReleaseGuard{% endblock %}
+{% block content %}
+{% if not result %}
+<section class="narrow" id="progress-page" data-run-id="{{ run_id }}">
+  <a class="back-link" href="/">← 返回首页</a>
+  <h1>正在审查 {{ record.project.name }}</h1>
+  <p class="lead small">页面会自动更新，请不要关闭服务窗口。</p>
+  <section class="panel progress-card">
+    <div class="elapsed">已耗时 <strong id="elapsed">{{ record.elapsed_seconds }}</strong> 秒</div>
+    <ol id="progress-steps" class="progress-steps">
+      {% for step in record.steps %}
+      <li data-step="{{ step.key }}" class="{{ step.status }}"><span></span>{{ step.label }}</li>
+      {% endfor %}
+    </ol>
+    <div id="model-wait" class="model-wait" {% if not record.waiting_for_model %}hidden{% endif %}>正在等待模型响应…</div>
+    <div id="run-error" class="message error" hidden></div>
+  </section>
+</section>
+{% else %}
+<section class="result-page">
+  <div class="result-heading">
+    <div>
+      <a class="back-link" href="/">← 选择其他项目</a>
+      <h1>{{ result.project.name }}</h1>
+      <p>{{ result.reviewed_at }} · {{ result.mode_label }} · {{ result.duration_seconds }} 秒</p>
+    </div>
+    <div class="decision {% if result.decision.release_allowed %}ready{% else %}blocked{% endif %}">{{ result.decision.label }}</div>
+  </div>
+
+  <section class="metrics">
+    <div><span>问题总数</span><strong>{{ result.summary.failed + result.summary.warning }}</strong></div>
+    <div><span>阻断</span><strong>{{ result.summary.blocking }}</strong></div>
+    <div><span>警告</span><strong>{{ result.summary.warning }}</strong></div>
+    <div><span>通过</span><strong>{{ result.summary.passed }}</strong></div>
+  </section>
+
+  <section class="ai-banner {% if result.ai.ai_invoked and not result.ai.fallback_used %}success{% elif result.ai.fallback_used %}warning{% else %}offline{% endif %}">
+    <strong>{{ result.ai.message }}</strong>
+    {% if result.ai.provider %}<span>{{ result.ai.provider }} · {{ result.ai.model }}{% if result.ai.latency_ms %} · {{ result.ai.latency_ms }} ms{% endif %}</span>{% endif %}
+  </section>
+
+  <section class="panel content-section">
+    <h2>AI 风险总结</h2>
+    <p class="summary-text">{{ result.risk_analysis.summary }}</p>
+    {% if result.ai.fallback_used %}
+    <p class="error-text">{{ result.ai.error_message }} 可返回配置页重新测试连接后重试。</p>
+    <a class="button secondary" href="/settings/ai">重新测试连接</a>
+    <button class="button primary rerun-ai" type="button" data-project-path="{{ result.project.path }}">重新执行 AI 审查</button>
+    {% endif %}
+  </section>
+
+  <section class="panel content-section">
+    <h2>优先修复计划</h2>
+    {% if result.fix_plan %}
+      {% for step in result.fix_plan %}
+      <article class="fix-item">
+        <span class="priority">P{{ step.priority }}</span>
+        <div><h3>{{ step.title }}</h3><p>{{ step.action }}</p>
+        {% if step.evidence_ids %}<p><b>证据：</b>{{ step.evidence_ids | join(', ') }}</p>{% endif %}
+        {% if step.suggested_files %}<p><b>建议文件：</b>{{ step.suggested_files | join(', ') }}</p>{% endif %}
+        <p><b>如何验证：</b>{{ step.validation }}</p></div>
+      </article>
+      {% endfor %}
+    {% else %}<p>当前没有阻断修复项。</p>{% endif %}
+  </section>
+
+  <section class="panel content-section">
+    <h2>确定性检查结果</h2>
+    <div class="check-list">
+      {% for check in result.checks %}
+      <article class="check-item status-{{ check.status }}">
+        <span class="check-status">{{ check.status }}</span>
+        <div><h3>{{ check.title }}</h3><p>{{ check.message }}</p>
+        {% if check.recommendation %}<p><b>建议：</b>{{ check.recommendation }}</p>{% endif %}</div>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel content-section">
+    <h2>规则证据</h2>
+    {% for evidence in result.evidence %}
+    <article class="evidence-item">
+      <div><b>{{ evidence.rule_id }}</b> · {{ evidence.metadata.get('title', '发布规则') }}</div>
+      <p>{{ evidence.text }}</p>
+      {% if evidence.related_findings %}<p><b>关联问题：</b>{{ evidence.related_findings | join(', ') }}</p>{% endif %}
+      <small>Evidence {{ evidence.evidence_id }} · Chunk {{ evidence.chunk_id }}</small>
+      {% if evidence.source_url %}<a href="{{ evidence.source_url }}" target="_blank" rel="noreferrer">查看来源</a>{% endif %}
+    </article>
+    {% else %}<p>本次没有可展示的规则证据。</p>{% endfor %}
+  </section>
+
+  <section class="panel content-section">
+    <h2>执行过程</h2>
+    <div class="route-list">{% for node in result.route_history %}<span>{{ node }}</span>{% endfor %}</div>
+    <details><summary>查看高级执行详情</summary><pre>{{ result.trace | tojson(indent=2) }}</pre></details>
+  </section>
+
+  <div class="result-actions">
+    <a class="button primary" href="/">重新审查</a>
+    <a class="button secondary" href="/runs/{{ run_id }}/download/markdown">下载完整 Markdown</a>
+    <a class="button secondary" href="/runs/{{ run_id }}/download/json">下载 JSON</a>
+    <button class="button ghost" id="open-result-directory" data-run-id="{{ run_id }}" type="button">打开结果目录</button>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

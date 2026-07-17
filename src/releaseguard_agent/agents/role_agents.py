@@ -47,6 +47,11 @@ class EvidenceAgent:
             if result.should_block_release
             for part in (result.rule_id or "", result.title, result.message)
         )
+        if not query.strip():
+            query = (
+                "release readiness dependency tests configuration "
+                "container health production safety"
+            )
         initial = self._tool.invoke(
             query,
             mode=request.retrieval_mode,

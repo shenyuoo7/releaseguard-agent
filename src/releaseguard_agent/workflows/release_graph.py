@@ -47,6 +47,7 @@ class ReleaseGraphState(TypedDict, total=False):
     llm_failed: bool
     error_type: str | None
     manual_review_required: bool
+    force_ai_review: bool
 
 
 class ReleaseAgentWorkflowResult:
@@ -130,7 +131,13 @@ def build_release_graph(
     ) -> Literal["clean", "evidence", "verify"]:
         if "baseline_review" in state:
             return _record_route(tracer, "scan", "verify")
-        destination = "clean" if state["review"].release_allowed else "evidence"
+        destination = (
+            "evidence"
+            if state.get("force_ai_review", False)
+            else "clean"
+            if state["review"].release_allowed
+            else "evidence"
+        )
         return _record_route(tracer, "scan", destination)
 
     def verifier_agent(state: ReleaseGraphState) -> ReleaseGraphState:

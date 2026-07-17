@@ -69,6 +69,13 @@ def test_uvicorn_serves_real_health_endpoint() -> None:
             "service": "releaseguard-agent",
             "deterministic_mode_available": True,
         }
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/",
+            timeout=3,
+        ) as response:
+            html = response.read().decode("utf-8")
+        assert "ReleaseGuard AI 发布审查" in html
+        assert "开始审查" in html
     finally:
         if process.poll() is None:
             process.terminate()

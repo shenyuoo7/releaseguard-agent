@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "retrieval_cases": [
+    {
+      "name": "exact-docker-rule",
+      "query": "RG-DOCKER-002",
+      "mode": "exact",
+      "top_k": 3,
+      "expected_rule_ids": ["RG-DOCKER-002"]
+    },
+    {
+      "name": "bm25-pytest-execution",
+      "query": "pytest execution command succeeds",
+      "mode": "bm25",
+      "top_k": 5,
+      "expected_rule_ids": ["RG-TEST-005"]
+    },
+    {
+      "name": "vector-docker",
+      "query": "docker FROM base image instruction",
+      "mode": "vector",
+      "top_k": 5,
+      "expected_rule_ids": ["RG-DOCKER-002"]
+    },
+    {
+      "name": "hybrid-fastapi-dependency",
+      "query": "FastAPI dependency declaration",
+      "mode": "hybrid",
+      "top_k": 5,
+      "expected_rule_ids": ["RG-FASTAPI-001"]
+    }
+  ],
+  "decision_cases": [
+    {
+      "name": "clean-release",
+      "project": "sample_projects/clean_python_project",
+      "include_pytest_execution": false,
+      "release_allowed": true
+    },
+    {
+      "name": "fastapi-blocker",
+      "project": "sample_projects/fastapi_bad_project",
+      "include_pytest_execution": false,
+      "release_allowed": false
+    }
+  ],
+  "graph_cases": [
+    {
+      "name": "clean-early-exit",
+      "project": "sample_projects/clean_python_project",
+      "include_pytest_execution": false,
+      "expected_nodes": ["scan", "finalize_clean"]
+    },
+    {
+      "name": "blocking-evidence-risk-fix",
+      "project": "sample_projects/fastapi_bad_project",
+      "include_pytest_execution": false,
+      "expected_nodes": ["scan", "evidence_agent", "risk_agent", "fix_planner_agent"]
+    }
+  ],
+  "llm_cases": [
+    {
+      "name": "fake-llm-valid-structured-output",
+      "project": "sample_projects/fastapi_bad_project"
+    }
+  ],
+  "verification_cases": [
+    {
+      "name": "fastapi-dependency-fixed",
+      "before_project": "sample_projects/fastapi_bad_project",
+      "after_project": "sample_projects/fastapi_good_project",
+      "resolved_rule_ids": ["RG-FASTAPI-001", "RG-TEST-007"],
+      "release_allowed": true
+    }
+  ]
+}

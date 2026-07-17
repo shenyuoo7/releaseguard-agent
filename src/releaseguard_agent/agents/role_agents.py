@@ -8,6 +8,7 @@ from releaseguard_agent.agent_tools import (
 )
 from releaseguard_agent.models.check_result import CheckStatus
 from releaseguard_agent.models.retrieval_evidence import RetrievalEvidence
+from releaseguard_agent.observability import ExecutionTracer
 from releaseguard_agent.services.release_review_service import ReleaseReviewResult
 
 
@@ -31,8 +32,13 @@ class EvidenceAgentOutput:
 class EvidenceAgent:
     """Retrieve and supplement source-backed evidence for blocking findings."""
 
-    def __init__(self, tool: EvidenceSearchTool) -> None:
+    def __init__(
+        self,
+        tool: EvidenceSearchTool,
+        tracer: ExecutionTracer | None = None,
+    ) -> None:
         self._tool = tool
+        self._tracer = tracer
 
     def run(self, request: EvidenceAgentInput) -> EvidenceAgentOutput:
         query = " ".join(
@@ -45,6 +51,7 @@ class EvidenceAgent:
             query,
             mode=request.retrieval_mode,
             top_k=request.top_k,
+            tracer=self._tracer,
         )
         combined = {item.chunk_id: item for item in initial.evidence}
         sufficient = _evidence_is_sufficient(
@@ -56,7 +63,12 @@ class EvidenceAgent:
             for result in request.review.check_results:
                 if not result.should_block_release or not result.rule_id:
                     continue
-                exact = self._tool.invoke(result.rule_id, mode="exact", top_k=10)
+                exact = self._tool.invoke(
+                    result.rule_id,
+                    mode="exact",
+                    top_k=10,
+                    tracer=self._tracer,
+                )
                 combined.update({item.chunk_id: item for item in exact.evidence})
             sufficient = _evidence_is_sufficient(
                 tuple(combined.values()), request.minimum_evidence
@@ -88,11 +100,20 @@ class RiskAgentOutput:
 class RiskAgent:
     """Analyze risk while preserving the deterministic release decision."""
 
-    def __init__(self, tool: RiskAnalysisTool) -> None:
+    def __init__(
+        self,
+        tool: RiskAnalysisTool,
+        tracer: ExecutionTracer | None = None,
+    ) -> None:
         self._tool = tool
+        self._tracer = tracer
 
     def run(self, request: RiskAgentInput) -> RiskAgentOutput:
-        result = self._tool.invoke(request.review, request.evidence)
+        result = self._tool.invoke(
+            request.review,
+            request.evidence,
+            tracer=self._tracer,
+        )
         analysis = dict(result.payload)
         analysis["release_allowed"] = request.review.release_allowed
         analysis["release_status"] = (
@@ -130,12 +151,21 @@ class FixPlannerAgentOutput:
 class FixPlannerAgent:
     """Create a manual remediation plan and ensure every blocker is covered."""
 
-    def __init__(self, tool: FixPlanTool) -> None:
+    def __init__(
+        self,
+        tool: FixPlanTool,
+        tracer: ExecutionTracer | None = None,
+    ) -> None:
         self._tool = tool
+        self._tracer = tracer
 
     def run(self, request: FixPlannerAgentInput) -> FixPlannerAgentOutput:
         raw_steps = list(
-            self._tool.invoke(request.review, request.risk.analysis)
+            self._tool.invoke(
+                request.review,
+                request.risk.analysis,
+                tracer=self._tracer,
+            )
         )
         blocking_rule_ids = {
             result.rule_id

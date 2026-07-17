@@ -16,6 +16,7 @@ from releaseguard_agent.agents.role_agents import (
     VerifierAgent,
 )
 from releaseguard_agent.llm import LLMRuntime
+from releaseguard_agent.observability import ExecutionTracer
 from releaseguard_agent.rag import RuleRetrievalService, get_default_rule_index_path
 from releaseguard_agent.services.release_review_service import (
     ReleaseReviewResult,
@@ -48,17 +49,9 @@ class ReleaseAgentWorkflowService:
             risk=RiskAnalysisTool(llm_runtime),
             fix_plan=FixPlanTool(),
         )
-        roles = ReleaseRoleAgents(
-            evidence=EvidenceAgent(self._tools.evidence),
-            risk=RiskAgent(self._tools.risk),
-            fix_planner=FixPlannerAgent(self._tools.fix_plan),
-            verifier=VerifierAgent(),
-        )
-        self._graph = build_release_graph(self._tools.scan, roles)
-
     @property
     def graph(self) -> Any:
-        return self._graph
+        return self._build_graph(None)
 
     def run(
         self,
@@ -69,7 +62,10 @@ class ReleaseAgentWorkflowService:
         top_k: int = 5,
         minimum_evidence: int = 1,
         baseline_review: ReleaseReviewResult | None = None,
+        tracer: ExecutionTracer | None = None,
+        trace_output_dir: Path | None = None,
     ) -> ReleaseAgentWorkflowResult:
+        active_tracer = tracer or ExecutionTracer()
         initial: ReleaseGraphState = {
             "project_path": str(Path(project_path).expanduser().resolve()),
             "include_pytest_execution": include_pytest_execution,
@@ -80,5 +76,28 @@ class ReleaseAgentWorkflowService:
         }
         if baseline_review is not None:
             initial["baseline_review"] = baseline_review
-        final_state = self._graph.invoke(initial)
-        return ReleaseAgentWorkflowResult(final_state)
+        final_state = self._build_graph(active_tracer).invoke(initial)
+        trace_artifacts = (
+            active_tracer.write(trace_output_dir)
+            if trace_output_dir is not None
+            else None
+        )
+        artifact_paths = (
+            {"execution_trace": str(trace_artifacts.trace_path)}
+            if trace_artifacts
+            else None
+        )
+        return ReleaseAgentWorkflowResult(
+            final_state,
+            trace=active_tracer.to_dict(artifact_paths=artifact_paths),
+            trace_artifacts=trace_artifacts,
+        )
+
+    def _build_graph(self, tracer: ExecutionTracer | None) -> Any:
+        roles = ReleaseRoleAgents(
+            evidence=EvidenceAgent(self._tools.evidence, tracer),
+            risk=RiskAgent(self._tools.risk, tracer),
+            fix_planner=FixPlannerAgent(self._tools.fix_plan, tracer),
+            verifier=VerifierAgent(),
+        )
+        return build_release_graph(self._tools.scan, roles, tracer)

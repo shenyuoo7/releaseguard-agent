@@ -1,4 +1,5 @@
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -16,6 +17,10 @@ from releaseguard_agent.agents.role_agents import (
     VerifierAgentOutput,
 )
 from releaseguard_agent.models.retrieval_evidence import RetrievalEvidence
+from releaseguard_agent.observability import (
+    ExecutionTraceArtifacts,
+    ExecutionTracer,
+)
 from releaseguard_agent.services.release_review_service import ReleaseReviewResult
 
 
@@ -47,8 +52,16 @@ class ReleaseGraphState(TypedDict, total=False):
 class ReleaseAgentWorkflowResult:
     """Serializable result from a compiled role-based LangGraph invocation."""
 
-    def __init__(self, state: ReleaseGraphState) -> None:
+    def __init__(
+        self,
+        state: ReleaseGraphState,
+        *,
+        trace: dict[str, Any] | None = None,
+        trace_artifacts: ExecutionTraceArtifacts | None = None,
+    ) -> None:
         self.state = state
+        self.trace = trace or {}
+        self.trace_artifacts = trace_artifacts
 
     @property
     def review(self) -> ReleaseReviewResult:
@@ -84,12 +97,19 @@ class ReleaseAgentWorkflowResult:
             "manual_review_required": self.state.get(
                 "manual_review_required", False
             ),
+            "trace": dict(self.trace),
+            "trace_artifacts": (
+                {"execution_trace": str(self.trace_artifacts.trace_path)}
+                if self.trace_artifacts
+                else {}
+            ),
         }
 
 
 def build_release_graph(
     scan_tool: ScanProjectTool,
     agents: ReleaseRoleAgents,
+    tracer: ExecutionTracer | None = None,
 ) -> Any:
     """Build and compile the conditional four-role ReleaseGuard StateGraph."""
 
@@ -97,6 +117,7 @@ def build_release_graph(
         review = scan_tool.invoke(
             Path(state["project_path"]),
             include_pytest_execution=state.get("include_pytest_execution", True),
+            tracer=tracer,
         )
         return {
             "review": review,
@@ -108,8 +129,9 @@ def build_release_graph(
         state: ReleaseGraphState,
     ) -> Literal["clean", "evidence", "verify"]:
         if "baseline_review" in state:
-            return "verify"
-        return "clean" if state["review"].release_allowed else "evidence"
+            return _record_route(tracer, "scan", "verify")
+        destination = "clean" if state["review"].release_allowed else "evidence"
+        return _record_route(tracer, "scan", destination)
 
     def verifier_agent(state: ReleaseGraphState) -> ReleaseGraphState:
         output = agents.verifier.run(
@@ -127,7 +149,10 @@ def build_release_graph(
     def route_after_verifier(
         state: ReleaseGraphState,
     ) -> Literal["complete", "evidence"]:
-        return "complete" if state["review"].release_allowed else "evidence"
+        destination = (
+            "complete" if state["review"].release_allowed else "evidence"
+        )
+        return _record_route(tracer, "verifier_agent", destination)
 
     def evidence_agent(state: ReleaseGraphState) -> ReleaseGraphState:
         output = agents.evidence.run(
@@ -151,7 +176,8 @@ def build_release_graph(
     def route_after_evidence(
         state: ReleaseGraphState,
     ) -> Literal["risk", "manual"]:
-        return "manual" if state["manual_review_required"] else "risk"
+        destination = "manual" if state["manual_review_required"] else "risk"
+        return _record_route(tracer, "evidence_agent", destination)
 
     def risk_agent(state: ReleaseGraphState) -> ReleaseGraphState:
         output = agents.risk.run(
@@ -173,7 +199,8 @@ def build_release_graph(
     def route_after_risk(
         state: ReleaseGraphState,
     ) -> Literal["fallback", "fix"]:
-        return "fallback" if state.get("llm_failed", False) else "fix"
+        destination = "fallback" if state.get("llm_failed", False) else "fix"
+        return _record_route(tracer, "risk_agent", destination)
 
     def deterministic_fallback(state: ReleaseGraphState) -> ReleaseGraphState:
         return {
@@ -229,15 +256,40 @@ def build_release_graph(
         }
 
     builder = StateGraph(ReleaseGraphState)
-    builder.add_node("scan", scan)
-    builder.add_node("evidence_agent", evidence_agent)
-    builder.add_node("risk_agent", risk_agent)
-    builder.add_node("fix_planner_agent", fix_planner_agent)
-    builder.add_node("verifier_agent", verifier_agent)
-    builder.add_node("deterministic_fallback", deterministic_fallback)
-    builder.add_node("finalize_clean", finalize_clean)
-    builder.add_node("verification_complete", verification_complete)
-    builder.add_node("manual_review", manual_review)
+    builder.add_node("scan", _traced_node(tracer, "scan", scan))
+    builder.add_node(
+        "evidence_agent",
+        _traced_node(tracer, "evidence_agent", evidence_agent),
+    )
+    builder.add_node(
+        "risk_agent", _traced_node(tracer, "risk_agent", risk_agent)
+    )
+    builder.add_node(
+        "fix_planner_agent",
+        _traced_node(tracer, "fix_planner_agent", fix_planner_agent),
+    )
+    builder.add_node(
+        "verifier_agent",
+        _traced_node(tracer, "verifier_agent", verifier_agent),
+    )
+    builder.add_node(
+        "deterministic_fallback",
+        _traced_node(
+            tracer, "deterministic_fallback", deterministic_fallback
+        ),
+    )
+    builder.add_node(
+        "finalize_clean",
+        _traced_node(tracer, "finalize_clean", finalize_clean),
+    )
+    builder.add_node(
+        "verification_complete",
+        _traced_node(tracer, "verification_complete", verification_complete),
+    )
+    builder.add_node(
+        "manual_review",
+        _traced_node(tracer, "manual_review", manual_review),
+    )
     builder.add_edge(START, "scan")
     builder.add_conditional_edges(
         "scan",
@@ -273,3 +325,38 @@ def build_release_graph(
 
 def _append_route(state: ReleaseGraphState, node: str) -> list[str]:
     return [*state.get("route_history", []), node]
+
+
+def _record_route(
+    tracer: ExecutionTracer | None,
+    source: str,
+    destination: str,
+) -> Any:
+    if tracer is not None:
+        tracer.route(source, destination)
+    return destination
+
+
+def _traced_node(
+    tracer: ExecutionTracer | None,
+    name: str,
+    action: Callable[[ReleaseGraphState], ReleaseGraphState],
+) -> Any:
+    if tracer is None:
+        return action
+
+    def invoke(state: ReleaseGraphState) -> ReleaseGraphState:
+        with tracer.span("node", node=name) as span:
+            result = action(state)
+            span.update(route=result.get("route"))
+            evidence = result.get("evidence", ())
+            if evidence:
+                span.update(
+                    evidence_ids=[item.evidence_id for item in evidence]
+                )
+            verification = result.get("verification")
+            if verification is not None:
+                span.update(before_after_delta=verification.to_dict())
+            return result
+
+    return invoke

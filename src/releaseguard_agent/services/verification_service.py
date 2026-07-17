@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from releaseguard_agent.agents.role_agents import VerifierAgentOutput
+from releaseguard_agent.observability import ExecutionTracer
 from releaseguard_agent.services.agent_workflow_service import (
     ReleaseAgentWorkflowService,
 )
@@ -58,15 +59,26 @@ class ReleaseVerificationService:
         before_project_path: Path,
         after_project_path: Path,
         include_pytest_execution: bool = True,
+        trace_output_dir: Path | None = None,
     ) -> ReleaseVerificationResult:
-        before = self._review_service.review(
-            project_path=before_project_path,
-            include_pytest_execution=include_pytest_execution,
-        )
+        tracer = ExecutionTracer()
+        with tracer.span(
+            "node", node="baseline_scan", tool="scan_project"
+        ) as span:
+            before = self._review_service.review(
+                project_path=before_project_path,
+                include_pytest_execution=include_pytest_execution,
+            )
+            span.update(
+                release_allowed=before.release_allowed,
+                finding_count=len(before.check_results),
+            )
         after_workflow = self._workflow_service.run(
             project_path=after_project_path,
             include_pytest_execution=include_pytest_execution,
             baseline_review=before,
+            tracer=tracer,
+            trace_output_dir=trace_output_dir,
         )
         delta = after_workflow.verification
         if delta is None:

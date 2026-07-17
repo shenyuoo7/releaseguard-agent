@@ -8,6 +8,7 @@ from releaseguard_agent.agents.release_risk_analysis_agent import (
 )
 from releaseguard_agent.llm import LLMRuntime
 from releaseguard_agent.models.retrieval_evidence import RetrievalEvidence
+from releaseguard_agent.observability import ExecutionTracer
 from releaseguard_agent.rag import RetrievalResult, RuleRetrievalService
 from releaseguard_agent.services.release_review_service import (
     ReleaseReviewResult,
@@ -27,11 +28,23 @@ class ScanProjectTool:
         project_path: Path,
         *,
         include_pytest_execution: bool,
+        tracer: ExecutionTracer | None = None,
     ) -> ReleaseReviewResult:
-        return self._service.review(
-            project_path=project_path,
-            include_pytest_execution=include_pytest_execution,
-        )
+        if tracer is None:
+            return self._service.review(
+                project_path=project_path,
+                include_pytest_execution=include_pytest_execution,
+            )
+        with tracer.span("tool", tool="scan_project") as span:
+            result = self._service.review(
+                project_path=project_path,
+                include_pytest_execution=include_pytest_execution,
+            )
+            span.update(
+                release_allowed=result.release_allowed,
+                finding_count=len(result.check_results),
+            )
+            return result
 
 
 class EvidenceSearchTool:
@@ -46,8 +59,29 @@ class EvidenceSearchTool:
         *,
         mode: str,
         top_k: int,
+        tracer: ExecutionTracer | None = None,
     ) -> RetrievalResult:
-        return self._service.retrieve(query, mode=mode, top_k=top_k)
+        if tracer is None:
+            return self._service.retrieve(query, mode=mode, top_k=top_k)
+        with tracer.span("retrieval", tool="search_rule_evidence") as span:
+            result = self._service.retrieve(query, mode=mode, top_k=top_k)
+            span.update(
+                retrieval_method=result.mode_used,
+                degraded_reason=result.degraded_reason,
+                retrieval_candidates=[
+                    {
+                        "evidence_id": item.evidence_id,
+                        "rule_id": item.rule_id,
+                        "chunk_id": item.chunk_id,
+                        "raw_score": item.raw_score,
+                        "fusion_score": item.fusion_score,
+                        "rerank_score": item.rerank_score,
+                    }
+                    for item in result.evidence
+                ],
+                evidence_ids=[item.evidence_id for item in result.evidence],
+            )
+            return result
 
 
 @dataclass(frozen=True)
@@ -68,6 +102,26 @@ class RiskAnalysisTool:
         self,
         review: ReleaseReviewResult,
         evidence: tuple[RetrievalEvidence, ...],
+        tracer: ExecutionTracer | None = None,
+    ) -> RiskToolResult:
+        if tracer is not None:
+            with tracer.span("tool", tool="analyze_risk") as span:
+                result = self._invoke(review, evidence, tracer=tracer)
+                span.update(
+                    llm_attempted=result.llm_attempted,
+                    llm_failed=result.llm_failed,
+                    error_type=result.error_type,
+                    evidence_ids=[item.evidence_id for item in evidence],
+                )
+                return result
+        return self._invoke(review, evidence, tracer=None)
+
+    def _invoke(
+        self,
+        review: ReleaseReviewResult,
+        evidence: tuple[RetrievalEvidence, ...],
+        *,
+        tracer: ExecutionTracer | None,
     ) -> RiskToolResult:
         runtime = self._runtime
         if runtime is None or runtime.client is None:
@@ -85,11 +139,28 @@ class RiskAnalysisTool:
             retrieval_evidence=evidence,
         )
         try:
-            result = ReleaseRiskAnalysisAgent(
-                llm_client=runtime.client,
-                model=runtime.model,
-                temperature=0.0,
-            ).analyze(context)
+            if tracer is None:
+                result = ReleaseRiskAnalysisAgent(
+                    llm_client=runtime.client,
+                    model=runtime.model,
+                    temperature=0.0,
+                ).analyze(context)
+            else:
+                with tracer.span(
+                    "llm",
+                    tool="llm.complete",
+                    provider=runtime.provider,
+                    model=runtime.model,
+                ) as llm_span:
+                    result = ReleaseRiskAnalysisAgent(
+                        llm_client=runtime.client,
+                        model=runtime.model,
+                        temperature=0.0,
+                    ).analyze(context)
+                    llm_span.update(
+                        token_usage=dict(result.llm_response.usage),
+                        evidence_ids=list(result.analysis.evidence_ids),
+                    )
         except Exception as exc:
             return RiskToolResult(
                 payload=_deterministic_risk_payload(review, evidence),
@@ -110,6 +181,19 @@ class FixPlanTool:
     """Build a concrete plan without modifying the reviewed repository."""
 
     def invoke(
+        self,
+        review: ReleaseReviewResult,
+        risk_payload: dict[str, Any],
+        tracer: ExecutionTracer | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        if tracer is not None:
+            with tracer.span("tool", tool="build_fix_plan") as span:
+                result = self._invoke(review, risk_payload)
+                span.update(step_count=len(result))
+                return result
+        return self._invoke(review, risk_payload)
+
+    def _invoke(
         self,
         review: ReleaseReviewResult,
         risk_payload: dict[str, Any],

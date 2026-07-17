@@ -119,7 +119,8 @@ src/releaseguard_agent/
 | `agent_tools/` | Graph-callable scan, evidence, risk-analysis, and fix-plan capabilities. |
 | `workflows/` | LangGraph state schema, nodes, edges, conditional routing, compile, and execution result. |
 | `reports/` | Markdown/JSON release reports and release checklist artifact writers. |
-| `observability/` | Deterministic trace artifact writer. |
+| `observability/` | Deterministic artifact trace plus redacted execution spans for graph nodes, tools, retrieval, LLM calls, and verification deltas. |
+| `evaluation/` | Offline golden-case runner and metric aggregation using fixed FakeLLM/embedding fixtures. |
 | `api/` | Synchronous FastAPI routes, strict request/response models, path policy, and uniform errors. |
 | `plugins/` | Reserved for future ecosystem/plugin expansion. |
 | `memory/` | Reserved for future run history or memory-related features. |
@@ -146,6 +147,21 @@ The graph has four role nodes with independent contracts: Evidence Agent, Risk
 Agent, Fix Planner Agent, and Verifier Agent. They share explicit graph state,
 not implicit global data. The deterministic `CheckResult.should_block_release`
 policy remains authoritative on every route.
+
+## Execution trace and evaluation
+
+`ExecutionTracer` records a per-run event stream for nodes, tools, retrieval,
+LLM calls, route choices, artifact paths, errors, and before/after deltas. It
+redacts credential-like keys and values before returning or writing
+`execution_trace.json`. A fresh tracer and graph are built for each service
+run, avoiding shared mutable trace state between API requests.
+
+`EvaluationRunner` executes fixed golden cases through the real retrieval,
+review, graph, LLM-parser, and verification code paths. It reports Recall@K,
+evidence source accuracy, deterministic decision consistency, structured LLM
+output validity, graph-path coverage, and before/after delta accuracy. The
+fixed embedding and FakeLLM make the suite offline and reproducible; they do
+not validate production semantic quality or live provider interoperability.
 
 ## End-to-end CLI flow
 

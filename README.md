@@ -220,5 +220,7 @@ against a real embedding model. Agent-callable tools and a compiled LangGraph
 conditional workflow are implemented. Evidence, Risk, Fix Planner, and Verifier
 are separate role nodes with typed state transfer; LLM output must cite supplied
 Evidence IDs and cannot override deterministic blocking facts. Execution-level
-trace/eval, Docker packaging, and GitHub Actions remain planned work. See the
-implementation status page for the evidence-backed boundary.
+trace and a fixed offline eval suite are implemented. Docker packaging and
+GitHub Actions remain planned work. The eval's fake embeddings validate
+repeatability and integration mechanics, not real semantic-search quality. See
+the implementation status page for the evidence-backed boundary.

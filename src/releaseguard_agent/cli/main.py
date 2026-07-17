@@ -9,6 +9,7 @@ from releaseguard_agent.core.default_checkers import (
     get_default_python_checker_names,
 )
 from releaseguard_agent.models.check_result import CheckResult
+from releaseguard_agent.evaluation import EvaluationRunner
 from releaseguard_agent.rag import (
     RuleRetrievalService,
     build_embedding_model,
@@ -137,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="hybrid",
     )
     workflow_parser.add_argument("--top-k", type=int, default=5)
+    workflow_parser.add_argument("--execution-trace-output-dir")
     workflow_parser.add_argument(
         "--enable-llm",
         action="store_true",
@@ -151,7 +153,18 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("before_project_path")
     verify_parser.add_argument("after_project_path")
     verify_parser.add_argument("--skip-pytest-execution", action="store_true")
+    verify_parser.add_argument("--execution-trace-output-dir")
     verify_parser.set_defaults(handler=run_verification_command)
+
+    eval_parser = subparsers.add_parser(
+        "evaluate",
+        help="Run the fixed offline ReleaseGuard evaluation dataset.",
+    )
+    eval_parser.add_argument(
+        "--dataset",
+        default="evals/datasets/golden_cases.json",
+    )
+    eval_parser.set_defaults(handler=run_evaluation_command)
 
     return parser
 
@@ -250,6 +263,7 @@ def run_agent_review_command(args: argparse.Namespace) -> int:
             include_pytest_execution=not args.skip_pytest_execution,
             retrieval_mode=args.retrieval_mode,
             top_k=args.top_k,
+            trace_output_dir=_optional_path(args.execution_trace_output_dir),
         )
     except (
         LLMProviderConfigurationError,
@@ -270,12 +284,23 @@ def run_verification_command(args: argparse.Namespace) -> int:
             before_project_path=Path(args.before_project_path),
             after_project_path=Path(args.after_project_path),
             include_pytest_execution=not args.skip_pytest_execution,
+            trace_output_dir=_optional_path(args.execution_trace_output_dir),
         )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         _print_error(str(exc))
         return EXIT_USAGE_ERROR
     print(json.dumps(result.to_dict(), indent=2))
     return EXIT_SUCCESS if result.release_allowed else EXIT_BLOCKING_ISSUES
+
+
+def run_evaluation_command(args: argparse.Namespace) -> int:
+    try:
+        result = EvaluationRunner().run(Path(args.dataset))
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        _print_error(str(exc))
+        return EXIT_USAGE_ERROR
+    print(json.dumps(result.to_dict(), indent=2))
+    return EXIT_SUCCESS if result.passed else EXIT_BLOCKING_ISSUES
 
 
 def _build_check_trace_command_args(

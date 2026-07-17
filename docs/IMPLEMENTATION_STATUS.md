@@ -1,6 +1,6 @@
 # ReleaseGuard Agent Implementation Status
 
-Last verified: 2026-07-17 (M6)
+Last verified: 2026-07-17 (M7)
 
 This page is the evidence-backed status of the local repository. A directory,
 class name, roadmap item, or resume keyword is not treated as implemented
@@ -56,9 +56,9 @@ still insufficient, and route LLM failures through a deterministic fallback.
 | LLM abstraction and FakeLLM | COMPLETE | Provider-neutral messages/responses/client protocol and deterministic fake client have unit tests. |
 | Optional LLM risk analysis | COMPLETE | CLI can enrich an existing deterministic review through `LLMReviewService`; FakeLLM covers the product path offline and deterministic facts remain authoritative. |
 | OpenAI-compatible adapter | COMPLETE | Explicit provider/model/base URL/timeout environment configuration builds the lazy SDK adapter; missing key falls back to deterministic mode and errors are sanitized. Real network interoperability is optional and not asserted by offline tests. |
-| Trace | PARTIAL | CLI run arguments, inputs, outputs, environment summary, and decision summary are recorded; graph/tool/retrieval/LLM events are not. |
-| Unit and integration tests | COMPLETE | 307 unit tests and 21 CLI/API integration tests pass at M6. |
-| E2E and eval system | PARTIAL | A real Uvicorn health smoke test exists; retrieval/Agent eval metrics do not. |
+| Trace | COMPLETE | Existing run traces remain available; Agent and verification flows additionally record redacted node/tool/retrieval/LLM events, route history, provenance IDs, latency, optional token usage, artifacts, errors, and before/after deltas. |
+| Unit and integration tests | COMPLETE | 312 unit tests and 21 CLI/API integration tests pass at M7. |
+| E2E and eval system | COMPLETE | A real Uvicorn health smoke test and a fixed offline golden-case eval cover six required metrics. FakeLLM/fixed embeddings prove repeatability and wiring, not provider or semantic quality. |
 | FastAPI product API | COMPLETE | `GET /health`, `POST /reviews`, and `POST /verifications` are real synchronous routes with strict schemas, safe path policy, uniform errors, TestClient integration, and Uvicorn health smoke coverage. |
 | Agent tools and LangGraph | COMPLETE | Reachable tool wrappers are called by a typed `StateGraph`; the graph has normal and conditional edges, is compiled, invoked by a service and CLI, and has four distinct tested routes. |
 | Role-based multi-agent workflow | COMPLETE | Evidence, Risk, Fix Planner, and Verifier have independent input/output dataclasses, execute as distinct graph nodes, and transfer typed state. One LLM instance may be shared, but deterministic policy resolves conflicts. |
@@ -207,6 +207,19 @@ M6 verification:
 | Ruff | Passed |
 | Mypy | 76 source files, no issues |
 
+M7 verification:
+
+| Suite/check | Result |
+| --- | --- |
+| Trace/eval/workflow focused selection | 16 passed |
+| `tests/unit` | 312 passed |
+| `tests/integration` | 21 passed |
+| `tests/e2e` | 1 passed |
+| Full suite | 334 passed |
+| Offline golden eval | Six required metrics = 1.0 on fixed cases |
+| Ruff | Passed |
+| Mypy | 79 source files, no issues |
+
 ## Known risks
 
 - The declared OpenAI SDK is installed in the project `.venv`, but installing
@@ -228,8 +241,9 @@ M6 verification:
   semantic quality or availability of a real embedding endpoint.
 - The current reranker is transparent deterministic token overlap rather than
   a learned cross-encoder.
-- There is no coverage percentage, retrieval benchmark, Agent eval,
-  Linux CI result, or container smoke test.
+- The golden eval is intentionally small. A perfect score on its fixed cases
+  does not establish broad retrieval, LLM, or production embedding quality.
+- There is no coverage percentage, Linux CI result, or container smoke test.
 
 ## Approved M0-M8 route
 
@@ -242,7 +256,7 @@ M6 verification:
 | M4 | BM25, vector retrieval, fusion, and reranking | Complete and verified locally |
 | M5 | Agent tools and LangGraph conditional workflow | Complete and verified locally |
 | M6 | Role-based Agents and user-applied-fix verification | Complete and verified locally |
-| M7 | Execution-level trace and minimum evals | Not started |
+| M7 | Execution-level trace and minimum evals | Complete and verified locally |
 | M8 | Docker, GitHub Actions, documentation, and interview training | Not started |
 
 Every milestone is independently implemented, verified, reviewed, documented,

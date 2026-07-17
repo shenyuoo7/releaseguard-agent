@@ -155,6 +155,10 @@ risk analysis, fix plan, final route, and route history. Add `--enable-llm`
 only when provider configuration is intentionally supplied; the normal command
 does not resolve credentials or call a provider.
 
+Add `--execution-trace-output-dir outputs\agent-trace` to write a redacted
+`execution_trace.json` containing graph-node, tool, retrieval, LLM, route, and
+artifact events.
+
 ## Verify a user-applied fix
 
 Preserve a baseline project snapshot, make the change in a separate working
@@ -167,6 +171,22 @@ snapshot, then run:
 The result includes both scans, the Verifier Agent delta, and the graph route.
 ReleaseGuard reports `resolved`, `new`, and `unchanged`; it never edits either
 snapshot.
+
+Add `--execution-trace-output-dir outputs\verification-trace` to include the
+before/after delta in the execution trace.
+
+## Run the offline evaluation
+
+Run the fixed golden dataset without credentials or network access:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main evaluate
+```
+
+The command reports Recall@K, evidence-source accuracy, deterministic decision
+consistency, structured LLM-output validity, graph-path coverage, and
+before/after delta accuracy. Its FakeLLM and fixed embedding are test fixtures;
+a perfect fixed-case score is not evidence of production semantic quality.
 
 ### `--trace-output-dir`
 

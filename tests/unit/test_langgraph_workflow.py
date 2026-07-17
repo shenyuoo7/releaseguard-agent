@@ -55,7 +55,14 @@ def test_blocking_path_runs_evidence_risk_and_fix_nodes() -> None:
 
 def test_insufficient_evidence_routes_to_supplement_and_manual_review() -> None:
     class EmptyEvidenceSearchTool(EvidenceSearchTool):
-        def invoke(self, query: str, *, mode: str, top_k: int) -> RetrievalResult:
+        def invoke(
+            self,
+            query: str,
+            *,
+            mode: str,
+            top_k: int,
+            tracer=None,
+        ) -> RetrievalResult:
             return RetrievalResult(query, mode, mode, None, ())
 
     retrieval = RuleRetrievalService(get_default_rule_index_path())

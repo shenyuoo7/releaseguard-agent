@@ -4,11 +4,10 @@ This document describes the current architecture of ReleaseGuard Agent.
 
 ReleaseGuard Agent is currently a CLI-and-API pre-release review system for
 Python, FastAPI, and Flask projects. It runs deterministic release-readiness
-checks, enriches findings with local rule evidence, produces deterministic
-release decision advice, and writes review artifacts for humans and automation.
-
-The current architecture is intentionally deterministic. It does not require
-live LLM calls, embeddings, a vector database, or network access.
+checks, retrieves traceable rule evidence, produces guarded release decision
+advice, and writes review artifacts for humans and automation. An optional
+compiled LangGraph workflow coordinates Agent-callable tools and conditional
+routes. Default operation remains deterministic and requires no network access.
 
 ## Current scope
 
@@ -69,6 +68,12 @@ flowchart TD
 
     Service --> TraceWriter["observability/trace_writer.py"]
 
+    CLI --> GraphService["services/agent_workflow_service.py"]
+    GraphService --> Graph["workflows/release_graph.py / StateGraph"]
+    Graph --> Tools["agent_tools: scan / evidence / risk / fix"]
+    Tools --> Service
+    Tools --> HybridRAG["exact / BM25 / LlamaIndex vector / hybrid"]
+
     ReportWriter --> ReportArtifacts["release_report.md + check_result.json"]
     ChecklistWriter --> ChecklistArtifact["release_checklist.md"]
     AdviceWriter --> AdviceArtifacts["release_decision_advice.md + release_decision_advice.json"]
@@ -80,6 +85,7 @@ flowchart TD
 ```text
 src/releaseguard_agent/
 |-- agents/
+|-- agent_tools/
 |-- api/
 |-- checkers/
 |-- cli/
@@ -93,6 +99,7 @@ src/releaseguard_agent/
 |-- reports/
 |-- scanners/
 |-- services/
+|-- workflows/
 `-- utils/
 ```
 
@@ -107,15 +114,35 @@ src/releaseguard_agent/
 | `scanners/` | Lower-level file scanners used by checkers. |
 | `detectors/` | Framework/project signal detection, such as FastAPI and Flask signals. |
 | `models/` | Shared data models such as `CheckResult` and rule evidence records. |
-| `rag/` | Local deterministic rule retrieval and check-result enrichment. |
+| `rag/` | Structured rule chunks, exact/BM25/LlamaIndex vector retrieval, hybrid fusion, provenance, and reranking. |
 | `agents/` | Deterministic release decision synthesis, explanation, advice service, and advice writers. |
+| `agent_tools/` | Graph-callable scan, evidence, risk-analysis, and fix-plan capabilities. |
+| `workflows/` | LangGraph state schema, nodes, edges, conditional routing, compile, and execution result. |
 | `reports/` | Markdown/JSON release reports and release checklist artifact writers. |
 | `observability/` | Deterministic trace artifact writer. |
 | `api/` | Synchronous FastAPI routes, strict request/response models, path policy, and uniform errors. |
 | `plugins/` | Reserved for future ecosystem/plugin expansion. |
 | `memory/` | Reserved for future run history or memory-related features. |
-| `services/` | Reserved for future service orchestration layer. |
 | `utils/` | Reserved for shared utilities. |
+
+## Conditional Agent workflow
+
+`releaseguard agent-review` reaches a real compiled `StateGraph`:
+
+```text
+START -> scan
+scan -> clean -> finalize_clean -> END
+scan -> blocking -> retrieve_evidence
+retrieve_evidence -> sufficient -> analyze_risk
+retrieve_evidence -> insufficient -> supplemental_retrieval
+supplemental_retrieval -> still insufficient -> manual_review -> END
+analyze_risk -> success/deterministic -> plan_fixes -> END
+analyze_risk -> LLM failure -> deterministic_fallback -> plan_fixes -> END
+```
+
+The graph is not yet the M6 four-role workflow. Its nodes are role-neutral and
+share one explicit state. The deterministic `CheckResult.should_block_release`
+policy remains authoritative on every route.
 
 ## End-to-end CLI flow
 

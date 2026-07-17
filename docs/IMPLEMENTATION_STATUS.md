@@ -1,6 +1,6 @@
 # ReleaseGuard Agent Implementation Status
 
-Last verified: 2026-07-17 (M4)
+Last verified: 2026-07-17 (M5)
 
 This page is the evidence-backed status of the local repository. A directory,
 class name, roadmap item, or resume keyword is not treated as implemented
@@ -34,6 +34,12 @@ factory, and optional CLI LLM analysis. A normal CLI/API run does not resolve
 provider configuration, require a key, or make an LLM network request. Only
 the explicit `--llm-analysis-output-dir` path can invoke a configured client.
 
+The `agent-review` CLI command invokes a compiled LangGraph `StateGraph` through
+`ReleaseAgentWorkflowService`. Graph nodes call typed scan, retrieval, guarded
+risk, and fix-plan tools. Conditional edges skip unnecessary work for clean
+projects, supplement missing evidence, request manual review when evidence is
+still insufficient, and route LLM failures through a deterministic fallback.
+
 ## Capability status
 
 | Capability | Status | Current evidence and boundary |
@@ -51,10 +57,10 @@ the explicit `--llm-analysis-output-dir` path can invoke a configured client.
 | Optional LLM risk analysis | COMPLETE | CLI can enrich an existing deterministic review through `LLMReviewService`; FakeLLM covers the product path offline and deterministic facts remain authoritative. |
 | OpenAI-compatible adapter | COMPLETE | Explicit provider/model/base URL/timeout environment configuration builds the lazy SDK adapter; missing key falls back to deterministic mode and errors are sanitized. Real network interoperability is optional and not asserted by offline tests. |
 | Trace | PARTIAL | CLI run arguments, inputs, outputs, environment summary, and decision summary are recorded; graph/tool/retrieval/LLM events are not. |
-| Unit and integration tests | COMPLETE | 273 unit tests and 21 CLI/API integration tests pass at M2. |
+| Unit and integration tests | COMPLETE | 301 unit tests and 21 CLI/API integration tests pass at M5. |
 | E2E and eval system | PARTIAL | A real Uvicorn health smoke test exists; retrieval/Agent eval metrics do not. |
 | FastAPI product API | PARTIAL | `GET /health` and `POST /reviews` are real synchronous routes using `ReleaseReviewService`; `POST /verifications` intentionally returns structured 501 until M6 adds before/after semantics. |
-| Agent tools and LangGraph | MISSING | No tool registry/executor, graph state, `StateGraph`, nodes, edges, or compiled workflow exists. |
+| Agent tools and LangGraph | COMPLETE | Reachable tool wrappers are called by a typed `StateGraph`; the graph has normal and conditional edges, is compiled, invoked by a service and CLI, and has four distinct tested routes. |
 | Role-based multi-agent workflow | MISSING | Evidence, Risk, Fix Planner, and Verifier roles are planned only. |
 | User-applied-fix verification | MISSING | No baseline run comparison or rescan verification service exists. |
 | Docker packaging and GitHub Actions | MISSING | No product Dockerfile or `.github/workflows` CI exists. |
@@ -75,6 +81,16 @@ CLI or POST /reviews
 
 The standalone `search-rules` CLI reaches exact/BM25/vector/hybrid retrieval.
 The LLM risk-analysis service is still outside the default review flow.
+
+The optional graph flow is:
+
+```text
+agent-review -> ReleaseAgentWorkflowService -> compiled StateGraph
+-> scan tool
+-> clean: finalize
+-> blocking: evidence tool -> [supplement/manual-review | risk tool]
+-> [LLM failure: deterministic fallback] -> fix-plan tool -> final state
+```
 
 ## Test baseline
 
@@ -165,6 +181,19 @@ M4 verification:
 | Ruff | Passed |
 | Mypy | 69 source files, no issues |
 
+M5 verification:
+
+| Suite/check | Result |
+| --- | --- |
+| Agent-tool/LangGraph/CLI focused selection | 8 passed |
+| Existing CLI/Agent/service boundary selection | 29 passed |
+| `tests/unit` | 301 passed |
+| `tests/integration` | 21 passed |
+| `tests/e2e` | 1 passed |
+| Full suite | 323 passed |
+| Ruff | Passed |
+| Mypy | 74 source files, no issues |
+
 ## Known risks
 
 - The declared OpenAI SDK is installed in the project `.venv`, but installing
@@ -186,6 +215,9 @@ M4 verification:
   semantic quality or availability of a real embedding endpoint.
 - The current reranker is transparent deterministic token overlap rather than
   a learned cross-encoder.
+- The M5 graph uses functional role-neutral nodes. It must not be described as
+  the final four-role multi-agent system until M6 adds independent contracts
+  and verifier state transfer.
 - There is no coverage percentage, retrieval benchmark, Agent eval,
   Linux CI result, or container smoke test.
 
@@ -198,7 +230,7 @@ M4 verification:
 | M2 | FastAPI and shared CLI/API use | Complete and verified locally; verification semantics deferred to M6 |
 | M3 | Production OpenAI-compatible provider configuration | Complete and offline verified |
 | M4 | BM25, vector retrieval, fusion, and reranking | Complete and verified locally |
-| M5 | Agent tools and LangGraph conditional workflow | Not started |
+| M5 | Agent tools and LangGraph conditional workflow | Complete and verified locally |
 | M6 | Role-based Agents and user-applied-fix verification | Not started |
 | M7 | Execution-level trace and minimum evals | Not started |
 | M8 | Docker, GitHub Actions, documentation, and interview training | Not started |
@@ -223,7 +255,7 @@ next milestone automatically and never pushes to a remote.
 | Structured reports | COMPLETE | Report, checklist, deterministic advice, and run trace artifacts. |
 | FastAPI API | PARTIAL | Health and review are reachable and tested through TestClient and Uvicorn; verification is explicitly unavailable until M6. |
 | BM25/vector/rerank/LlamaIndex | COMPLETE | Reachable exact/BM25/vector/hybrid service and CLI; LlamaIndex owns vector indexing, candidates are fused/deduplicated, and a deterministic reranker produces final scores. |
-| Agent tools/LangGraph | MISSING | Planned for M5. |
+| Agent tools/LangGraph | COMPLETE | Real tool invocations and a compiled `StateGraph` with normal/conditional edges and tested clean, blocking, evidence-gap, and LLM-fallback routes. |
 | Multi-agent workflow | MISSING | Planned role nodes: Evidence, Risk, Fix Planner, and Verifier. |
 | Complete repair loop | MISSING | Planned manual-edit rescan and before/after comparison; no automatic edits. |
 | Linux/GitHub Actions | MISSING | Planned for M8. |

@@ -24,6 +24,9 @@ from releaseguard_agent.services import (
     ReleaseReviewService,
     ReviewArtifactError,
 )
+from releaseguard_agent.services.agent_workflow_service import (
+    ReleaseAgentWorkflowService,
+)
 
 EXIT_SUCCESS = 0
 EXIT_BLOCKING_ISSUES = 1
@@ -119,6 +122,25 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--top-k", type=int, default=5)
     search_parser.set_defaults(handler=run_search_rules_command)
 
+    workflow_parser = subparsers.add_parser(
+        "agent-review",
+        help="Run the conditional LangGraph release workflow.",
+    )
+    workflow_parser.add_argument("project_path", nargs="?", default=".")
+    workflow_parser.add_argument("--skip-pytest-execution", action="store_true")
+    workflow_parser.add_argument(
+        "--retrieval-mode",
+        choices=("exact", "bm25", "vector", "hybrid"),
+        default="hybrid",
+    )
+    workflow_parser.add_argument("--top-k", type=int, default=5)
+    workflow_parser.add_argument(
+        "--enable-llm",
+        action="store_true",
+        help="Explicitly enable configured LLM analysis for blocking reviews.",
+    )
+    workflow_parser.set_defaults(handler=run_agent_review_command)
+
     return parser
 
 
@@ -206,6 +228,28 @@ def run_search_rules_command(args: argparse.Namespace) -> int:
         return EXIT_USAGE_ERROR
     print(json.dumps(result.to_dict(), indent=2))
     return EXIT_SUCCESS
+
+
+def run_agent_review_command(args: argparse.Namespace) -> int:
+    try:
+        runtime = build_llm_runtime(os.environ) if args.enable_llm else None
+        result = ReleaseAgentWorkflowService(llm_runtime=runtime).run(
+            project_path=Path(args.project_path),
+            include_pytest_execution=not args.skip_pytest_execution,
+            retrieval_mode=args.retrieval_mode,
+            top_k=args.top_k,
+        )
+    except (
+        LLMProviderConfigurationError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        _print_error(str(exc))
+        return EXIT_USAGE_ERROR
+    print(json.dumps(result.to_dict(), indent=2))
+    return EXIT_SUCCESS if result.release_allowed else EXIT_BLOCKING_ISSUES
 
 
 def _build_check_trace_command_args(

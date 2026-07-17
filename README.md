@@ -140,6 +140,15 @@ Search trusted release rules offline with BM25:
 none is configured, the command returns `mode_used: bm25` with an explicit
 `embedding_unavailable` degradation reason instead of contacting a provider.
 
+Run the conditional LangGraph workflow in deterministic mode:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main agent-review sample_projects\fastapi_bad_project --skip-pytest-execution
+```
+
+This command uses real graph nodes and conditional edges. `--enable-llm` is
+explicit opt-in; without it, risk explanation and fix planning stay offline.
+
 ## Exit codes
 
 | Exit code | Meaning |
@@ -198,7 +207,8 @@ retrieval, and hybrid fusion with deduplication and deterministic reranking.
 Vector and hybrid modes require an explicitly configured embedding provider;
 without one they report the degradation and fall back to offline BM25. This is
 retrieval infrastructure, not a claim that semantic quality has been validated
-against a real embedding model. LangGraph, role-based multi-agent orchestration,
-post-fix verification semantics, Docker packaging, and GitHub Actions remain
-planned work. See the implementation status page for the evidence-backed
-boundary.
+against a real embedding model. Agent-callable tools and a compiled LangGraph
+conditional workflow are implemented. The current graph is not yet the final
+four-role multi-agent design; role contracts, post-fix verification semantics,
+Docker packaging, and GitHub Actions remain planned work. See the implementation
+status page for the evidence-backed boundary.

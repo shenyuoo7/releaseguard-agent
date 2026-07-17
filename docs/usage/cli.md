@@ -142,6 +142,19 @@ Use these files when you want:
 
 The current advice path is deterministic and does not require a live LLM call.
 
+## Conditional Agent workflow
+
+Run the real compiled LangGraph workflow without network access:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main agent-review sample_projects\fastapi_bad_project --skip-pytest-execution
+```
+
+The JSON result includes the deterministic review, retrieved Evidence, guarded
+risk analysis, fix plan, final route, and route history. Add `--enable-llm`
+only when provider configuration is intentionally supplied; the normal command
+does not resolve credentials or call a provider.
+
 ### `--trace-output-dir`
 
 Writes an observability trace artifact:

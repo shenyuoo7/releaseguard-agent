@@ -6,3 +6,4 @@ uvicorn==0.51.0
 rank-bm25==0.2.2
 llama-index-core==0.14.23
 llama-index-embeddings-openai==0.6.0
+langgraph==1.2.7

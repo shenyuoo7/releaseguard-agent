@@ -97,5 +97,9 @@ def test_simple_launcher_keeps_default_operation_offline_and_on_e_drive() -> Non
     assert "$env:TMPDIR" in launcher
     assert "$env:PIP_CACHE_DIR" in launcher
     assert "$env:PYTEST_ADDOPTS" in launcher
+    assert "Join-Path $script:ProjectRoot '.runtime'" in launcher
+    assert "正在检查" in launcher
+    assert "确定性离线模式" in launcher
+    assert "真实 LLM 智能分析需要 API Key" in launcher
     assert "RELEASEGUARD_LLM" not in launcher
     assert "Get-Content .env" not in launcher

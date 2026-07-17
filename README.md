@@ -13,6 +13,11 @@ Windows 用户日常只需双击项目根目录的 `ReleaseGuard.bat`，然后�
 菜单选择检查项目、启动网页、修复前后对比或自带演示。第一次使用选择
 “安装或修复运行环境”。详见 [极简使用说明](docs/SIMPLE_USAGE.md)。
 
+菜单默认执行确定性离线检查，因此不需要 API Key。真实 LLM Agent 分析
+并非“无 Key 也能联网”：它需要安全配置 OpenAI-compatible Provider、
+模型和 `RELEASEGUARD_LLM_API_KEY`，再通过显式 LLM 选项启用。默认菜单
+不会读取 `.env`，也不会把离线规则检查描述成真实模型调用。
+
 Phase 1 focuses on Python projects, including:
 
 - `python-generic`

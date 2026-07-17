@@ -23,7 +23,7 @@ $script:PythonPath = Join-Path $script:ProjectRoot '.venv\Scripts\python.exe'
 $script:RuntimeRoot = if ($RuntimeRoot) {
     [System.IO.Path]::GetFullPath($RuntimeRoot)
 } else {
-    Join-Path (Split-Path -Parent $script:ProjectRoot) 'ReleaseGuard_Agent_runtime'
+    Join-Path $script:ProjectRoot '.runtime'
 }
 
 function Initialize-ReleaseGuardEnvironment {
@@ -127,6 +127,12 @@ function Invoke-QuickReview {
         Join-Path $script:ProjectRoot 'outputs\latest_review'
     }
     $runDirectory = New-RunOutputDirectory -BaseDirectory $base
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    if (-not $Json) {
+        Write-Host ''
+        Write-Host "正在检查：$target" -ForegroundColor Cyan
+        Write-Host '项目较大时可能需要几十秒，请不要关闭窗口……'
+    }
     $command = Invoke-ReleaseGuardCli -AcceptedExitCodes @(0, 1) -Arguments @(
         'check', $target,
         '--skip-pytest-execution',
@@ -136,6 +142,7 @@ function Invoke-QuickReview {
         '--agent-advice-output-dir', $runDirectory,
         '--trace-output-dir', $runDirectory
     )
+    $stopwatch.Stop()
     $payload = $command.output | ConvertFrom-Json
     $issueCount = [int]$payload.summary.failed + [int]$payload.summary.warning
     return [pscustomobject]@{
@@ -146,6 +153,9 @@ function Invoke-QuickReview {
         release_allowed = [bool]($payload.summary.blocking -eq 0)
         issue_count = $issueCount
         blocking_count = [int]$payload.summary.blocking
+        elapsed_seconds = [math]::Round($stopwatch.Elapsed.TotalSeconds, 2)
+        llm_used = $false
+        mode = 'deterministic_offline'
         report_path = Join-Path $runDirectory 'release_report.md'
         checklist_path = Join-Path $runDirectory 'release_checklist.md'
         trace_path = Join-Path $runDirectory 'trace.json'
@@ -170,11 +180,17 @@ function Invoke-BeforeAfterVerification {
         Join-Path $script:ProjectRoot 'outputs\latest_verification'
     }
     $runDirectory = New-RunOutputDirectory -BaseDirectory $base
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    if (-not $Json) {
+        Write-Host ''
+        Write-Host '正在重新扫描并比较修复前后结果，请稍候……' -ForegroundColor Cyan
+    }
     $command = Invoke-ReleaseGuardCli -AcceptedExitCodes @(0, 1) -Arguments @(
         'verify', $before, $after,
         '--skip-pytest-execution',
         '--execution-trace-output-dir', $runDirectory
     )
+    $stopwatch.Stop()
     $payload = $command.output | ConvertFrom-Json
     $resultPath = Join-Path $runDirectory 'verification_result.json'
     $command.output | Set-Content -LiteralPath $resultPath -Encoding UTF8
@@ -189,6 +205,9 @@ function Invoke-BeforeAfterVerification {
         unchanged_count = @($payload.delta.unchanged).Count
         release_allowed = [bool]$payload.delta.release_allowed
         status = [string]$payload.delta.status
+        elapsed_seconds = [math]::Round($stopwatch.Elapsed.TotalSeconds, 2)
+        llm_used = $false
+        mode = 'deterministic_offline'
         result_path = $resultPath
         trace_path = Join-Path $runDirectory 'execution_trace.json'
         output_directory = $runDirectory
@@ -306,6 +325,10 @@ function Invoke-BuiltInDemo {
         Join-Path $script:ProjectRoot 'outputs\latest_demo'
     }
     $runDirectory = New-RunOutputDirectory -BaseDirectory $base
+    if (-not $Json) {
+        Write-Host ''
+        Write-Host '正在运行 clean、blocking 和修复对比演示，请稍候……' -ForegroundColor Cyan
+    }
     $clean = Invoke-QuickReview -TargetPath (Join-Path $script:ProjectRoot 'sample_projects\clean_python_project') -BaseOutputDirectory (Join-Path $runDirectory 'clean')
     $blocking = Invoke-QuickReview -TargetPath (Join-Path $script:ProjectRoot 'sample_projects\fastapi_bad_project') -BaseOutputDirectory (Join-Path $runDirectory 'blocking')
     $verification = Invoke-BeforeAfterVerification -BaselinePath (Join-Path $script:ProjectRoot 'sample_projects\fastapi_bad_project') -ModifiedPath (Join-Path $script:ProjectRoot 'sample_projects\fastapi_good_project') -BaseOutputDirectory (Join-Path $runDirectory 'verification')
@@ -384,15 +407,19 @@ function Write-ActionResult {
             Write-Host ('是否允许发布：{0}' -f $(if ($Result.release_allowed) { '是' } else { '否' }))
             Write-Host "发现问题：$($Result.issue_count)"
             Write-Host "阻断问题：$($Result.blocking_count)"
+            Write-Host "耗时：$($Result.elapsed_seconds) 秒"
             Write-Host "报告位置：$($Result.report_path)"
             Write-Host "清单位置：$($Result.checklist_path)"
             Write-Host "Trace位置：$($Result.trace_path)"
+            Write-Host '运行模式：确定性离线检查（本次未调用 LLM）'
+            Write-Host '如需真实 LLM 智能分析，必须安全配置 API Key 并显式启用。'
         }
         'verify' {
             Write-Host ''
             Write-Host "已解决问题：$($Result.resolved_count)"
             Write-Host "新增问题：$($Result.new_count)"
             Write-Host "未解决问题：$($Result.unchanged_count)"
+            Write-Host "耗时：$($Result.elapsed_seconds) 秒"
             Write-Host ('最终是否允许发布：{0}' -f $(if ($Result.release_allowed) { '是' } else { '否' }))
             Write-Host "详细结果目录：$($Result.output_directory)"
         }
@@ -431,6 +458,9 @@ function Show-MainMenu {
         Write-Host '================================'
         Write-Host 'ReleaseGuard 发布检查助手'
         Write-Host '================================'
+        Write-Host '当前默认：确定性离线模式（不调用 LLM）'
+        Write-Host '真实 LLM 智能分析需要 API Key，并且必须显式启用。'
+        Write-Host '--------------------------------'
         Write-Host '1. 快速检查一个项目'
         Write-Host '2. 启动网页界面'
         Write-Host '3. 对比修复前后项目'

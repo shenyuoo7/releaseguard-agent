@@ -95,6 +95,9 @@ def test_launcher_checks_a_project_whose_path_contains_spaces(tmp_path: Path) ->
     result = _json_result(completed)
     assert result["release_allowed"] is True
     assert result["blocking_count"] == 0
+    assert result["mode"] == "deterministic_offline"
+    assert result["llm_used"] is False
+    assert float(result["elapsed_seconds"]) >= 0
     assert Path(str(result["report_path"])).is_file()
     assert Path(str(result["checklist_path"])).is_file()
     assert Path(str(result["trace_path"])).is_file()
@@ -173,3 +176,5 @@ def test_launcher_menu_exits_normally() -> None:
     completed = _run_launcher("-Action", "Menu", "-NoPause", input_text="0\n")
 
     assert completed.returncode == 0, completed.stderr
+    assert "确定性离线模式" in completed.stdout
+    assert "真实 LLM 智能分析需要 API Key" in completed.stdout

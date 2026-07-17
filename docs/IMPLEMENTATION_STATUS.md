@@ -288,6 +288,7 @@ Local AI Web product verification:
 | Mypy | 83 source files, no issues |
 | Docker build/runtime | Passed: Web image, homepage, health, offline UI review, four artifacts, UID 10001, health `healthy` |
 | Real provider request | Not run automatically; only the user-facing “测试连接” action may initiate it |
+| Remote GitHub Actions | Run #2 (`29567733870`) on Web commit `6fbaf26` succeeded; quality/tests and container smoke were green |
 
 ## Known risks
 
@@ -317,8 +318,9 @@ Local AI Web product verification:
   a learned cross-encoder.
 - The golden eval is intentionally small. A perfect score on its fixed cases
   does not establish broad retrieval, LLM, or production embedding quality.
-- There is no coverage percentage. The previous checkpoint passed remote Linux
-  CI; the current Web checkpoint still requires its post-push Actions result.
+- There is no coverage percentage. Web commit `6fbaf26` passed remote Linux CI
+  run #2; GitHub emitted a non-blocking Node.js deprecation warning for
+  `actions/setup-python@v5`.
 - Docker has been validated locally on Docker Desktop/Linux. This does not
   establish behavior on every Docker Engine version or provide untrusted-code
   isolation.

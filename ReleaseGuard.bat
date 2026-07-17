@@ -1,21 +1,24 @@
 @echo off
 setlocal
+chcp 65001 >nul
 
 set "RELEASEGUARD_ROOT=%~dp0"
-set "RELEASEGUARD_PYTHON=%RELEASEGUARD_ROOT%.venv\Scripts\python.exe"
+set "RELEASEGUARD_LAUNCHER=%RELEASEGUARD_ROOT%scripts\simple_launcher.ps1"
 
-if not exist "%RELEASEGUARD_PYTHON%" (
-    echo ReleaseGuard virtual environment not found: "%RELEASEGUARD_PYTHON%" 1>&2
+if not exist "%RELEASEGUARD_LAUNCHER%" (
+    echo [ERROR] Launcher script not found: "%RELEASEGUARD_LAUNCHER%"
+    echo Restore the project files and try again.
+    if "%~1"=="" pause
     exit /b 2
 )
 
-set "PYTHONPATH=%RELEASEGUARD_ROOT%src"
-set "PYTHONDONTWRITEBYTECODE=1"
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%RELEASEGUARD_LAUNCHER%" %*
+set "RELEASEGUARD_EXIT_CODE=%ERRORLEVEL%"
 
-if "%~1"=="" (
-    "%RELEASEGUARD_PYTHON%" -m releaseguard_agent.cli.main --help
-) else (
-    "%RELEASEGUARD_PYTHON%" -m releaseguard_agent.cli.main %*
+if not "%RELEASEGUARD_EXIT_CODE%"=="0" if "%~1"=="" (
+    echo.
+    echo The launcher failed. Review the error message above.
+    pause
 )
 
-exit /b %ERRORLEVEL%
+exit /b %RELEASEGUARD_EXIT_CODE%

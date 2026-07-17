@@ -7,16 +7,22 @@ It scans a project before release, runs deterministic release-readiness checks,
 enriches findings with rule evidence, and writes human-readable and
 machine-readable artifacts for review.
 
+## 最简单使用方式
+
+Windows 用户日常只需双击项目根目录的 `ReleaseGuard.bat`，然后从中文
+菜单选择检查项目、启动网页、修复前后对比或自带演示。第一次使用选择
+“安装或修复运行环境”。详见 [极简使用说明](docs/SIMPLE_USAGE.md)。
+
 Phase 1 focuses on Python projects, including:
 
 - `python-generic`
 - `fastapi`
 - `flask`
 
-The CLI and synchronous FastAPI app are product entry points. Both reuse the
-same review service. An OpenAI-compatible provider is explicit opt-in; normal
-CLI/API reviews, graph execution, and the golden eval work without credentials
-or network access.
+The Windows menu, CLI, and synchronous FastAPI app are product entry points.
+They reuse the same service/workflow boundaries. An OpenAI-compatible provider
+is explicit opt-in; normal reviews, graph execution, and the golden eval work
+without credentials or network access.
 
 ## What it checks today
 
@@ -50,15 +56,15 @@ A full CLI run can generate the following files:
 
 ## Quick start
 
-From the repository root:
+命令行用户也可以从项目根目录直接传入 CLI 参数：
 
 ```powershell
-.\ReleaseGuard.bat check sample_projects\clean_python_project --skip-pytest-execution
+.\ReleaseGuard.bat -Action Check -ProjectPath sample_projects\clean_python_project -NoPause
 ```
 
-`ReleaseGuard.bat` is a thin Windows entry point that uses the project `.venv`
-and forwards every argument and exit code to the real Python CLI. Running it
-without arguments shows CLI help.
+`ReleaseGuard.bat` without arguments opens the menu. Its PowerShell launcher
+sets the project environment and calls the existing CLI/API entry points; it
+does not duplicate release-review business logic.
 
 The equivalent direct Python command is:
 
@@ -264,7 +270,7 @@ Evidence IDs and cannot override deterministic blocking facts. Execution-level
 trace and a fixed offline eval suite are implemented. The non-root local Docker
 demo has passed image, API, user-ID, and Docker health checks. The Ubuntu
 GitHub Actions workflow covers tests, Eval, lint, types, and container smoke;
-its remote run status is reported separately. The eval's fake
+its first remote Ubuntu run passed on commit `469dc48`. The eval's fake
 embeddings validate repeatability and integration mechanics, not real
 semantic-search quality. See the implementation status page for the
 evidence-backed boundary.

@@ -1,6 +1,6 @@
 # ReleaseGuard Agent Implementation Status
 
-Last verified: 2026-07-17 (M8)
+Last verified: 2026-07-17 (final launcher closeout)
 
 This page is the evidence-backed status of the local repository. A directory,
 class name, roadmap item, or resume keyword is not treated as implemented
@@ -57,15 +57,15 @@ still insufficient, and route LLM failures through a deterministic fallback.
 | Optional LLM risk analysis | COMPLETE | CLI can enrich an existing deterministic review through `LLMReviewService`; FakeLLM covers the product path offline and deterministic facts remain authoritative. |
 | OpenAI-compatible adapter | COMPLETE | Explicit provider/model/base URL/timeout environment configuration builds the lazy SDK adapter; missing key falls back to deterministic mode and errors are sanitized. Real network interoperability is optional and not asserted by offline tests. |
 | Trace | COMPLETE | Existing run traces remain available; Agent and verification flows additionally record redacted node/tool/retrieval/LLM events, route history, provenance IDs, latency, optional token usage, artifacts, errors, and before/after deltas. |
-| Unit and integration tests | COMPLETE | 316 unit tests and 21 CLI/API integration tests pass at final closeout. |
+| Unit and integration tests | COMPLETE | 318 unit tests and 27 CLI/API/launcher integration tests pass at final launcher closeout. |
 | E2E and eval system | COMPLETE | A real Uvicorn health smoke test and a fixed offline golden-case eval cover six required metrics. FakeLLM/fixed embeddings prove repeatability and wiring, not provider or semantic quality. |
 | FastAPI product API | COMPLETE | `GET /health`, `POST /reviews`, and `POST /verifications` are real synchronous routes with strict schemas, safe path policy, uniform errors, TestClient integration, and Uvicorn health smoke coverage. |
 | Agent tools and LangGraph | COMPLETE | Reachable tool wrappers are called by a typed `StateGraph`; the graph has normal and conditional edges, is compiled, invoked by a service and CLI, and has four distinct tested routes. |
 | Role-based multi-agent workflow | COMPLETE | Evidence, Risk, Fix Planner, and Verifier have independent input/output dataclasses, execute as distinct graph nodes, and transfer typed state. One LLM instance may be shared, but deterministic policy resolves conflicts. |
 | User-applied-fix verification | COMPLETE | CLI/API call `ReleaseVerificationService`, scan separate before/after snapshots, run the Verifier Agent, report resolved/new/unchanged, and use the after scan for the final decision. No repository is modified. |
 | Docker packaging | COMPLETE | The non-root demo image builds on Docker Desktop/Linux, serves all three API endpoints, runs as UID 10001, and reaches Docker health `healthy`. It remains a demo image, not an untrusted-code sandbox. |
-| GitHub Actions | PARTIAL | The Ubuntu workflow is implemented and locally parsed/tested. Remote execution is pending the first push of `yin/releaseguard-complete`. |
-| Windows batch entry | COMPLETE | Root `ReleaseGuard.bat` is a thin `.venv`-based CLI passthrough that preserves CLI arguments and exit codes. |
+| GitHub Actions | COMPLETE | Push run #1 for `yin/releaseguard-complete` completed successfully on Ubuntu: quality/tests/Eval and container smoke both passed. |
+| Windows one-click entry | COMPLETE | Root `ReleaseGuard.bat` opens the tested Chinese PowerShell menu for review, local API docs, before/after verification, demos, and environment repair. Core operations call existing CLI/API boundaries. |
 
 ## Current main flow
 
@@ -235,7 +235,20 @@ M8 verification:
 | Ruff | Passed |
 | Mypy | 79 source files, no issues |
 | Docker build/health | Passed: image built, API health/review/verification passed, UID 10001, Docker health `healthy` |
-| Remote GitHub Actions | Pending the authorized push of `yin/releaseguard-complete` |
+| Remote GitHub Actions | Later verified by successful push run #1 on commit `469dc48` |
+
+Final one-click launcher closeout verification:
+
+| Suite/check | Result |
+| --- | --- |
+| Launcher focused | 11 passed |
+| `tests/unit` | 318 passed |
+| `tests/integration` | 27 passed |
+| `tests/e2e` | 1 passed |
+| Full suite | 346 passed |
+| Environment repair health | Python 3.11.9, 8 checkers, dependencies already satisfied |
+| Docker build/runtime | Passed: Linux engine, health `healthy`, UID 10001, clean HTTP review allowed |
+| Remote GitHub Actions baseline | Run #1 on commit `469dc48` succeeded; both jobs green |
 
 ## Known risks
 
@@ -281,7 +294,7 @@ M8 verification:
 | M5 | Agent tools and LangGraph conditional workflow | Complete and verified locally |
 | M6 | Role-based Agents and user-applied-fix verification | Complete and verified locally |
 | M7 | Execution-level trace and minimum evals | Complete and verified locally |
-| M8 | Docker, GitHub Actions, documentation, and interview training | Implementation and local Docker verification complete; remote Actions pending |
+| M8 | Docker, GitHub Actions, documentation, and interview training | Complete; local Docker and remote Ubuntu Actions verified |
 
 Every milestone is independently implemented, verified, reviewed, documented,
 and saved as a local checkpoint. The approved completion run continues to the
@@ -306,7 +319,7 @@ next milestone automatically and never pushes to a remote.
 | Agent tools/LangGraph | COMPLETE | Real tool invocations and a compiled `StateGraph` with normal/conditional edges and tested clean, blocking, evidence-gap, and LLM-fallback routes. |
 | Multi-agent workflow | COMPLETE | Four role Agents have separate contracts and graph nodes; state and Evidence IDs are explicit, and deterministic policy wins conflicts. |
 | Complete repair loop | COMPLETE | Scan, evidence, decision, fix plan, user manual edit, rescan, Verifier before/after delta, and final deterministic decision are reachable; no automatic edits. |
-| Linux/GitHub Actions | PARTIAL | Ubuntu workflow contains quality, unit/integration/E2E, Eval, Docker build, and health smoke jobs; YAML/commands are tested locally, but no remote run was triggered. |
+| Linux/GitHub Actions | COMPLETE | Ubuntu push run #1 executed quality, unit/integration/E2E, Eval, Docker build, and health smoke successfully on commit `469dc48`. |
 
 Until a later milestone changes this page with code and test evidence, missing
 or partial capabilities must not be described as complete.

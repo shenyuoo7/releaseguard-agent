@@ -155,6 +155,19 @@ risk analysis, fix plan, final route, and route history. Add `--enable-llm`
 only when provider configuration is intentionally supplied; the normal command
 does not resolve credentials or call a provider.
 
+## Verify a user-applied fix
+
+Preserve a baseline project snapshot, make the change in a separate working
+snapshot, then run:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main verify path\to\before path\to\after --skip-pytest-execution
+```
+
+The result includes both scans, the Verifier Agent delta, and the graph route.
+ReleaseGuard reports `resolved`, `new`, and `unchanged`; it never edits either
+snapshot.
+
 ### `--trace-output-dir`
 
 Writes an observability trace artifact:

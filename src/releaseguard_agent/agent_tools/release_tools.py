@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from releaseguard_agent.agents import (
+from releaseguard_agent.agents.release_risk_analysis_agent import (
     ReleaseRiskAnalysisAgent,
     ReleaseRiskAnalysisContext,
 )
@@ -82,9 +82,7 @@ class RiskAnalysisTool:
         )
         context = ReleaseRiskAnalysisContext(
             advice_result=advice,
-            trace_payload={
-                "retrieval_evidence": [item.to_dict() for item in evidence],
-            },
+            retrieval_evidence=evidence,
         )
         try:
             result = ReleaseRiskAnalysisAgent(
@@ -101,7 +99,6 @@ class RiskAnalysisTool:
             )
         payload = result.analysis.to_dict()
         payload["analysis_source"] = "llm"
-        payload["evidence_ids"] = [item.evidence_id for item in evidence]
         return RiskToolResult(
             payload=payload,
             llm_attempted=True,

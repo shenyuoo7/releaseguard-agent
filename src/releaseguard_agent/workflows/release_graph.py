@@ -3,7 +3,18 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from releaseguard_agent.agent_tools import ReleaseWorkflowTools
+from releaseguard_agent.agent_tools import ScanProjectTool
+from releaseguard_agent.agents.role_agents import (
+    EvidenceAgentInput,
+    EvidenceAgentOutput,
+    FixPlannerAgentInput,
+    FixPlannerAgentOutput,
+    ReleaseRoleAgents,
+    RiskAgentInput,
+    RiskAgentOutput,
+    VerifierAgentInput,
+    VerifierAgentOutput,
+)
 from releaseguard_agent.models.retrieval_evidence import RetrievalEvidence
 from releaseguard_agent.services.release_review_service import ReleaseReviewResult
 
@@ -14,13 +25,19 @@ class ReleaseGraphState(TypedDict, total=False):
     retrieval_mode: str
     top_k: int
     minimum_evidence: int
+    baseline_review: ReleaseReviewResult
     review: ReleaseReviewResult
     evidence: tuple[RetrievalEvidence, ...]
+    evidence_output: EvidenceAgentOutput
+    risk_output: RiskAgentOutput
+    fix_plan_output: FixPlannerAgentOutput
+    verification: VerifierAgentOutput
     risk_analysis: dict[str, Any]
     fix_plan: tuple[dict[str, Any], ...]
     route: str
     route_history: list[str]
     degraded_reason: str | None
+    supplemental_retrieval: bool
     llm_attempted: bool
     llm_failed: bool
     error_type: str | None
@@ -28,7 +45,7 @@ class ReleaseGraphState(TypedDict, total=False):
 
 
 class ReleaseAgentWorkflowResult:
-    """Serializable result from a compiled LangGraph invocation."""
+    """Serializable result from a compiled role-based LangGraph invocation."""
 
     def __init__(self, state: ReleaseGraphState) -> None:
         self.state = state
@@ -41,7 +58,12 @@ class ReleaseAgentWorkflowResult:
     def release_allowed(self) -> bool:
         return self.review.release_allowed
 
+    @property
+    def verification(self) -> VerifierAgentOutput | None:
+        return self.state.get("verification")
+
     def to_dict(self) -> dict[str, Any]:
+        verification = self.verification
         return {
             "review": self.review.to_dict(),
             "evidence": [
@@ -49,9 +71,13 @@ class ReleaseAgentWorkflowResult:
             ],
             "risk_analysis": dict(self.state.get("risk_analysis", {})),
             "fix_plan": [dict(step) for step in self.state.get("fix_plan", ())],
+            "verification": verification.to_dict() if verification else None,
             "route": self.state.get("route"),
             "route_history": list(self.state.get("route_history", [])),
             "degraded_reason": self.state.get("degraded_reason"),
+            "supplemental_retrieval": self.state.get(
+                "supplemental_retrieval", False
+            ),
             "llm_attempted": self.state.get("llm_attempted", False),
             "llm_failed": self.state.get("llm_failed", False),
             "error_type": self.state.get("error_type"),
@@ -61,11 +87,14 @@ class ReleaseAgentWorkflowResult:
         }
 
 
-def build_release_graph(tools: ReleaseWorkflowTools) -> Any:
-    """Build and compile the real conditional ReleaseGuard StateGraph."""
+def build_release_graph(
+    scan_tool: ScanProjectTool,
+    agents: ReleaseRoleAgents,
+) -> Any:
+    """Build and compile the conditional four-role ReleaseGuard StateGraph."""
 
     def scan(state: ReleaseGraphState) -> ReleaseGraphState:
-        review = tools.scan.invoke(
+        review = scan_tool.invoke(
             Path(state["project_path"]),
             include_pytest_execution=state.get("include_pytest_execution", True),
         )
@@ -77,64 +106,68 @@ def build_release_graph(tools: ReleaseWorkflowTools) -> Any:
 
     def route_after_scan(
         state: ReleaseGraphState,
-    ) -> Literal["clean", "evidence"]:
+    ) -> Literal["clean", "evidence", "verify"]:
+        if "baseline_review" in state:
+            return "verify"
         return "clean" if state["review"].release_allowed else "evidence"
 
-    def retrieve_evidence(state: ReleaseGraphState) -> ReleaseGraphState:
-        review = state["review"]
-        query = " ".join(
-            part
-            for result in review.check_results
-            if result.should_block_release
-            for part in (result.rule_id or "", result.title, result.message)
-        )
-        result = tools.evidence.invoke(
-            query,
-            mode=state.get("retrieval_mode", "hybrid"),
-            top_k=state.get("top_k", 5),
+    def verifier_agent(state: ReleaseGraphState) -> ReleaseGraphState:
+        output = agents.verifier.run(
+            VerifierAgentInput(
+                before=state["baseline_review"],
+                after=state["review"],
+            )
         )
         return {
-            "evidence": result.evidence,
-            "degraded_reason": result.degraded_reason,
-            "route": "evidence_retrieved",
-            "route_history": _append_route(state, "retrieve_evidence"),
+            "verification": output,
+            "route": "verified",
+            "route_history": _append_route(state, "verifier_agent"),
+        }
+
+    def route_after_verifier(
+        state: ReleaseGraphState,
+    ) -> Literal["complete", "evidence"]:
+        return "complete" if state["review"].release_allowed else "evidence"
+
+    def evidence_agent(state: ReleaseGraphState) -> ReleaseGraphState:
+        output = agents.evidence.run(
+            EvidenceAgentInput(
+                review=state["review"],
+                retrieval_mode=state.get("retrieval_mode", "hybrid"),
+                top_k=state.get("top_k", 5),
+                minimum_evidence=state.get("minimum_evidence", 1),
+            )
+        )
+        return {
+            "evidence_output": output,
+            "evidence": output.evidence,
+            "degraded_reason": output.degraded_reason,
+            "supplemental_retrieval": output.supplemental_attempted,
+            "manual_review_required": output.manual_review_required,
+            "route": "evidence_complete",
+            "route_history": _append_route(state, "evidence_agent"),
         }
 
     def route_after_evidence(
         state: ReleaseGraphState,
-    ) -> Literal["risk", "supplement"]:
-        return "risk" if _has_enough_evidence(state) else "supplement"
-
-    def supplemental_retrieval(state: ReleaseGraphState) -> ReleaseGraphState:
-        combined = {item.chunk_id: item for item in state.get("evidence", ())}
-        for result in state["review"].check_results:
-            if not result.should_block_release or not result.rule_id:
-                continue
-            exact = tools.evidence.invoke(result.rule_id, mode="exact", top_k=10)
-            combined.update({item.chunk_id: item for item in exact.evidence})
-        return {
-            "evidence": tuple(combined.values()),
-            "route": "supplemental_retrieval",
-            "route_history": _append_route(state, "supplemental_retrieval"),
-        }
-
-    def route_after_supplement(
-        state: ReleaseGraphState,
     ) -> Literal["risk", "manual"]:
-        return "risk" if _has_enough_evidence(state) else "manual"
+        return "manual" if state["manual_review_required"] else "risk"
 
-    def analyze_risk(state: ReleaseGraphState) -> ReleaseGraphState:
-        result = tools.risk.invoke(
-            state["review"],
-            state.get("evidence", ()),
+    def risk_agent(state: ReleaseGraphState) -> ReleaseGraphState:
+        output = agents.risk.run(
+            RiskAgentInput(
+                review=state["review"],
+                evidence=state.get("evidence", ()),
+            )
         )
         return {
-            "risk_analysis": result.payload,
-            "llm_attempted": result.llm_attempted,
-            "llm_failed": result.llm_failed,
-            "error_type": result.error_type,
-            "route": "risk_analyzed",
-            "route_history": _append_route(state, "analyze_risk"),
+            "risk_output": output,
+            "risk_analysis": output.analysis,
+            "llm_attempted": output.llm_attempted,
+            "llm_failed": output.llm_failed,
+            "error_type": output.error_type,
+            "route": "risk_complete",
+            "route_history": _append_route(state, "risk_agent"),
         }
 
     def route_after_risk(
@@ -148,15 +181,19 @@ def build_release_graph(tools: ReleaseWorkflowTools) -> Any:
             "route_history": _append_route(state, "deterministic_fallback"),
         }
 
-    def plan_fixes(state: ReleaseGraphState) -> ReleaseGraphState:
-        plan = tools.fix_plan.invoke(
-            state["review"],
-            state.get("risk_analysis", {}),
+    def fix_planner_agent(state: ReleaseGraphState) -> ReleaseGraphState:
+        output = agents.fix_planner.run(
+            FixPlannerAgentInput(
+                review=state["review"],
+                risk=state["risk_output"],
+                evidence=state.get("evidence", ()),
+            )
         )
         return {
-            "fix_plan": plan,
-            "route": "fix_plan_generated",
-            "route_history": _append_route(state, "plan_fixes"),
+            "fix_plan_output": output,
+            "fix_plan": output.steps,
+            "route": "fix_plan_complete",
+            "route_history": _append_route(state, "fix_planner_agent"),
         }
 
     def finalize_clean(state: ReleaseGraphState) -> ReleaseGraphState:
@@ -175,9 +212,17 @@ def build_release_graph(tools: ReleaseWorkflowTools) -> Any:
             "route_history": _append_route(state, "finalize_clean"),
         }
 
+    def verification_complete(state: ReleaseGraphState) -> ReleaseGraphState:
+        return {
+            "evidence": state["review"].retrieval_evidence,
+            "fix_plan": (),
+            "manual_review_required": False,
+            "route": "verification_complete",
+            "route_history": _append_route(state, "verification_complete"),
+        }
+
     def manual_review(state: ReleaseGraphState) -> ReleaseGraphState:
         return {
-            "manual_review_required": True,
             "fix_plan": (),
             "route": "manual_review_required",
             "route_history": _append_route(state, "manual_review"),
@@ -185,48 +230,46 @@ def build_release_graph(tools: ReleaseWorkflowTools) -> Any:
 
     builder = StateGraph(ReleaseGraphState)
     builder.add_node("scan", scan)
-    builder.add_node("retrieve_evidence", retrieve_evidence)
-    builder.add_node("supplemental_retrieval", supplemental_retrieval)
-    builder.add_node("analyze_risk", analyze_risk)
+    builder.add_node("evidence_agent", evidence_agent)
+    builder.add_node("risk_agent", risk_agent)
+    builder.add_node("fix_planner_agent", fix_planner_agent)
+    builder.add_node("verifier_agent", verifier_agent)
     builder.add_node("deterministic_fallback", deterministic_fallback)
-    builder.add_node("plan_fixes", plan_fixes)
     builder.add_node("finalize_clean", finalize_clean)
+    builder.add_node("verification_complete", verification_complete)
     builder.add_node("manual_review", manual_review)
     builder.add_edge(START, "scan")
     builder.add_conditional_edges(
         "scan",
         route_after_scan,
-        {"clean": "finalize_clean", "evidence": "retrieve_evidence"},
+        {
+            "clean": "finalize_clean",
+            "evidence": "evidence_agent",
+            "verify": "verifier_agent",
+        },
     )
     builder.add_conditional_edges(
-        "retrieve_evidence",
+        "verifier_agent",
+        route_after_verifier,
+        {"complete": "verification_complete", "evidence": "evidence_agent"},
+    )
+    builder.add_conditional_edges(
+        "evidence_agent",
         route_after_evidence,
-        {"risk": "analyze_risk", "supplement": "supplemental_retrieval"},
+        {"risk": "risk_agent", "manual": "manual_review"},
     )
     builder.add_conditional_edges(
-        "supplemental_retrieval",
-        route_after_supplement,
-        {"risk": "analyze_risk", "manual": "manual_review"},
-    )
-    builder.add_conditional_edges(
-        "analyze_risk",
+        "risk_agent",
         route_after_risk,
-        {"fallback": "deterministic_fallback", "fix": "plan_fixes"},
+        {"fallback": "deterministic_fallback", "fix": "fix_planner_agent"},
     )
-    builder.add_edge("deterministic_fallback", "plan_fixes")
-    builder.add_edge("plan_fixes", END)
+    builder.add_edge("deterministic_fallback", "fix_planner_agent")
+    builder.add_edge("fix_planner_agent", END)
     builder.add_edge("finalize_clean", END)
+    builder.add_edge("verification_complete", END)
     builder.add_edge("manual_review", END)
     return builder.compile()
 
 
 def _append_route(state: ReleaseGraphState, node: str) -> list[str]:
     return [*state.get("route_history", []), node]
-
-
-def _has_enough_evidence(state: ReleaseGraphState) -> bool:
-    evidence = state.get("evidence", ())
-    minimum = state.get("minimum_evidence", 1)
-    return len(evidence) >= minimum and all(
-        item.rule_id and item.chunk_id and item.local_source for item in evidence
-    )

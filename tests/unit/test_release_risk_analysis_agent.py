@@ -19,6 +19,7 @@ from releaseguard_agent.models.check_result import (
     CheckStatus,
     RiskLevel,
 )
+from releaseguard_agent.models.retrieval_evidence import RetrievalEvidence
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -120,12 +121,29 @@ def _model_response(**overrides: object) -> str:
             }
         ],
         "evidence_rule_ids": ["RG-DOCKER-003"],
+        "evidence_ids": [],
         "unsupported_claims": [],
         "missing_evidence_notes": [],
     }
     payload.update(overrides)
 
     return json.dumps(payload)
+
+
+def _retrieval_evidence() -> RetrievalEvidence:
+    return RetrievalEvidence(
+        evidence_id="EVID-RG-DOCKER-003:chunk-01",
+        rule_id="RG-DOCKER-003",
+        source_url="https://docs.docker.com/reference/dockerfile/",
+        local_source="knowledge_base/release_rules/sources/dockerfile_reference.md",
+        chunk_id="RG-DOCKER-003:chunk-01",
+        retrieval_method="exact",
+        raw_score=1.0,
+        fusion_score=0.0,
+        rerank_score=0.0,
+        text="Dockerfile release contract",
+        metadata={},
+    )
 
 
 def test_agent_calls_llm_with_grounded_context_and_parses_analysis(
@@ -162,7 +180,7 @@ def test_agent_calls_llm_with_grounded_context_and_parses_analysis(
     assert call.response_format == "json_object"
     assert call.metadata == {
         "agent": "ReleaseRiskAnalysisAgent",
-        "schema_version": "1.0",
+        "schema_version": "1.1",
     }
 
     assert call.messages[0].role == "system"
@@ -254,10 +272,41 @@ def test_result_can_be_converted_to_dict(tmp_path: Path) -> None:
 
     data = agent.analyze(context).to_dict()
 
-    assert data["analysis"]["schema_version"] == "1.0"
+    assert data["analysis"]["schema_version"] == "1.1"
     assert data["analysis"]["release_status"] == "blocked"
     assert data["llm_response"]["provider"] == "fake"
     assert data["prompt_messages"][0]["role"] == "system"
     assert data["context"]["advice_result"]["workflow_result"][
         "decision"
     ]["status"] == "blocked"
+
+
+def test_agent_requires_and_validates_evidence_id_citations(
+    tmp_path: Path,
+) -> None:
+    evidence = _retrieval_evidence()
+    context = ReleaseRiskAnalysisContext(
+        advice_result=_advice_result(tmp_path, _check_result()),
+        retrieval_evidence=(evidence,),
+    )
+    valid = ReleaseRiskAnalysisAgent(
+        llm_client=FakeLLMClient(
+            [_model_response(evidence_ids=[evidence.evidence_id])]
+        )
+    ).analyze(context)
+
+    assert valid.analysis.evidence_ids == (evidence.evidence_id,)
+    assert valid.context.to_dict()["retrieval_evidence"][0]["chunk_id"] == (
+        evidence.chunk_id
+    )
+
+    invalid_agent = ReleaseRiskAnalysisAgent(
+        llm_client=FakeLLMClient(
+            [_model_response(evidence_ids=["EVID-NOT-IN-CONTEXT"])]
+        )
+    )
+    with pytest.raises(
+        ReleaseRiskAnalysisParseError,
+        match="outside the supplied context",
+    ):
+        invalid_agent.analyze(context)

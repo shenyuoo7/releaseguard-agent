@@ -8,9 +8,19 @@ from releaseguard_agent.agent_tools import (
     RiskAnalysisTool,
     ScanProjectTool,
 )
+from releaseguard_agent.agents.role_agents import (
+    EvidenceAgent,
+    FixPlannerAgent,
+    ReleaseRoleAgents,
+    RiskAgent,
+    VerifierAgent,
+)
 from releaseguard_agent.llm import LLMRuntime
 from releaseguard_agent.rag import RuleRetrievalService, get_default_rule_index_path
-from releaseguard_agent.services.release_review_service import ReleaseReviewService
+from releaseguard_agent.services.release_review_service import (
+    ReleaseReviewResult,
+    ReleaseReviewService,
+)
 from releaseguard_agent.workflows import (
     ReleaseAgentWorkflowResult,
     ReleaseGraphState,
@@ -38,7 +48,13 @@ class ReleaseAgentWorkflowService:
             risk=RiskAnalysisTool(llm_runtime),
             fix_plan=FixPlanTool(),
         )
-        self._graph = build_release_graph(self._tools)
+        roles = ReleaseRoleAgents(
+            evidence=EvidenceAgent(self._tools.evidence),
+            risk=RiskAgent(self._tools.risk),
+            fix_planner=FixPlannerAgent(self._tools.fix_plan),
+            verifier=VerifierAgent(),
+        )
+        self._graph = build_release_graph(self._tools.scan, roles)
 
     @property
     def graph(self) -> Any:
@@ -52,6 +68,7 @@ class ReleaseAgentWorkflowService:
         retrieval_mode: str = "hybrid",
         top_k: int = 5,
         minimum_evidence: int = 1,
+        baseline_review: ReleaseReviewResult | None = None,
     ) -> ReleaseAgentWorkflowResult:
         initial: ReleaseGraphState = {
             "project_path": str(Path(project_path).expanduser().resolve()),
@@ -61,5 +78,7 @@ class ReleaseAgentWorkflowService:
             "minimum_evidence": minimum_evidence,
             "route_history": [],
         }
+        if baseline_review is not None:
+            initial["baseline_review"] = baseline_review
         final_state = self._graph.invoke(initial)
         return ReleaseAgentWorkflowResult(final_state)

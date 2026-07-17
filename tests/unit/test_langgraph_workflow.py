@@ -44,9 +44,9 @@ def test_blocking_path_runs_evidence_risk_and_fix_nodes() -> None:
     assert result.release_allowed is False
     assert result.state["route_history"] == [
         "scan",
-        "retrieve_evidence",
-        "analyze_risk",
-        "plan_fixes",
+        "evidence_agent",
+        "risk_agent",
+        "fix_planner_agent",
     ]
     assert result.state["evidence"]
     assert result.state["fix_plan"]
@@ -72,10 +72,10 @@ def test_insufficient_evidence_routes_to_supplement_and_manual_review() -> None:
 
     assert result.state["route_history"] == [
         "scan",
-        "retrieve_evidence",
-        "supplemental_retrieval",
+        "evidence_agent",
         "manual_review",
     ]
+    assert result.state["supplemental_retrieval"] is True
     assert result.state["manual_review_required"] is True
     assert "risk_analysis" not in result.state
 
@@ -98,10 +98,10 @@ def test_llm_failure_routes_through_deterministic_fallback() -> None:
     assert result.state["risk_analysis"]["analysis_source"] == "deterministic"
     assert result.state["route_history"] == [
         "scan",
-        "retrieve_evidence",
-        "analyze_risk",
+        "evidence_agent",
+        "risk_agent",
         "deterministic_fallback",
-        "plan_fixes",
+        "fix_planner_agent",
     ]
 
 
@@ -110,12 +110,13 @@ def test_compiled_graph_exposes_real_nodes_and_edges() -> None:
 
     assert {
         "scan",
-        "retrieve_evidence",
-        "supplemental_retrieval",
-        "analyze_risk",
+        "evidence_agent",
+        "risk_agent",
         "deterministic_fallback",
-        "plan_fixes",
+        "fix_planner_agent",
         "finalize_clean",
+        "verification_complete",
+        "verifier_agent",
         "manual_review",
     }.issubset(graph.nodes)
     assert len(graph.edges) >= 9

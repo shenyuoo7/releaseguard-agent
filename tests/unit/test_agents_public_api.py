@@ -80,7 +80,7 @@ def test_agents_public_api_exports_expected_names() -> None:
 def test_agents_public_api_imports_representative_types() -> None:
     assert ADVICE_SCHEMA_VERSION == "1.0"
     assert RELEASE_RISK_ANALYSIS_ARTIFACT_SCHEMA_VERSION == "1.0"
-    assert RELEASE_RISK_ANALYSIS_SCHEMA_VERSION == "1.0"
+    assert RELEASE_RISK_ANALYSIS_SCHEMA_VERSION == "1.1"
     assert ReleaseDecisionStatus.READY.value == "ready"
 
     assert callable(ReleaseDecision)

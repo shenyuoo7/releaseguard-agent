@@ -149,6 +149,15 @@ Run the conditional LangGraph workflow in deterministic mode:
 This command uses real graph nodes and conditional edges. `--enable-llm` is
 explicit opt-in; without it, risk explanation and fix planning stay offline.
 
+Compare a baseline snapshot with a user-modified snapshot:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main verify path\to\before path\to\after --skip-pytest-execution
+```
+
+ReleaseGuard never applies the change. It rescans both snapshots and reports
+resolved, new, and unchanged findings.
+
 ## Exit codes
 
 | Exit code | Meaning |
@@ -198,9 +207,9 @@ The project currently has a working CLI path for Python/FastAPI/Flask
 release-readiness review, deterministic rule evidence enrichment, release
 decision advice, report artifacts, checklist artifacts, and trace artifacts.
 The CLI and `POST /reviews` delegate scanning to the shared
-`ReleaseReviewService`. `GET /health` is also operational. The verification
-route remains explicitly unavailable until M6 supplies real before/after
-semantics.
+`ReleaseReviewService`. `GET /health` and synchronous `POST /verifications` are
+also operational. Verification rescans caller-supplied before/after snapshots;
+it never edits the reviewed repository.
 
 Rule lookup now supports exact rule ID, BM25 Top-K, LlamaIndex in-memory vector
 retrieval, and hybrid fusion with deduplication and deterministic reranking.
@@ -208,7 +217,8 @@ Vector and hybrid modes require an explicitly configured embedding provider;
 without one they report the degradation and fall back to offline BM25. This is
 retrieval infrastructure, not a claim that semantic quality has been validated
 against a real embedding model. Agent-callable tools and a compiled LangGraph
-conditional workflow are implemented. The current graph is not yet the final
-four-role multi-agent design; role contracts, post-fix verification semantics,
-Docker packaging, and GitHub Actions remain planned work. See the implementation
-status page for the evidence-backed boundary.
+conditional workflow are implemented. Evidence, Risk, Fix Planner, and Verifier
+are separate role nodes with typed state transfer; LLM output must cite supplied
+Evidence IDs and cannot override deterministic blocking facts. Execution-level
+trace/eval, Docker packaging, and GitHub Actions remain planned work. See the
+implementation status page for the evidence-backed boundary.

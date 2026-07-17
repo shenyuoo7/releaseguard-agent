@@ -8,9 +8,10 @@ from releaseguard_agent.agents.release_decision_advisor import (
     ReleaseDecisionAdviceResult,
 )
 from releaseguard_agent.llm import LLMClient, LLMMessage, LLMResponse
+from releaseguard_agent.models.retrieval_evidence import RetrievalEvidence
 
 
-RELEASE_RISK_ANALYSIS_SCHEMA_VERSION = "1.0"
+RELEASE_RISK_ANALYSIS_SCHEMA_VERSION = "1.1"
 
 _ALLOWED_RISK_LEVELS = {
     "low",
@@ -31,9 +32,15 @@ class ReleaseRiskAnalysisContext:
     advice_result: ReleaseDecisionAdviceResult
     release_report_markdown: str | None = None
     release_checklist_markdown: str | None = None
+    retrieval_evidence: tuple[RetrievalEvidence, ...] = ()
     trace_payload: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "retrieval_evidence",
+            tuple(copy.deepcopy(self.retrieval_evidence)),
+        )
         object.__setattr__(
             self,
             "trace_payload",
@@ -46,6 +53,9 @@ class ReleaseRiskAnalysisContext:
             "advice_result": self.advice_result.to_dict(),
             "release_report_markdown": self.release_report_markdown,
             "release_checklist_markdown": self.release_checklist_markdown,
+            "retrieval_evidence": [
+                item.to_dict() for item in self.retrieval_evidence
+            ],
             "trace_payload": copy.deepcopy(dict(self.trace_payload)),
         }
 
@@ -67,6 +77,7 @@ class ReleaseRiskAnalysis:
     unsupported_claims: tuple[str, ...]
     missing_evidence_notes: tuple[str, ...]
     guardrail_notes: tuple[str, ...]
+    evidence_ids: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """Convert analysis to a stable dictionary."""
@@ -90,6 +101,7 @@ class ReleaseRiskAnalysis:
             "unsupported_claims": list(self.unsupported_claims),
             "missing_evidence_notes": list(self.missing_evidence_notes),
             "guardrail_notes": list(self.guardrail_notes),
+            "evidence_ids": list(self.evidence_ids),
         }
 
 
@@ -189,6 +201,7 @@ def _build_prompt_messages(
                 }
             ],
             "evidence_rule_ids": ["Rule IDs cited by the analysis."],
+            "evidence_ids": ["Evidence IDs cited by the analysis."],
             "unsupported_claims": ["Claims without evidence, if any."],
             "missing_evidence_notes": ["Evidence gaps, if any."],
         },
@@ -216,6 +229,7 @@ Rules:
 - Do not invent checks, files, commands, rule IDs, or source citations.
 - Do not hide missing evidence.
 - Do not silently override deterministic release status.
+- Cite supplied evidence using exact Evidence IDs in `evidence_ids`.
 - If your release_status or release_allowed differs from the deterministic
   decision, the deterministic decision remains authoritative.
 - Prioritize fixes that unblock release first.
@@ -283,7 +297,26 @@ def _parse_analysis(
             model_release_status=model_release_status,
             model_release_allowed=model_release_allowed,
         ),
+        evidence_ids=_validated_evidence_ids(payload, context),
     )
+
+
+def _validated_evidence_ids(
+    payload: Mapping[str, Any],
+    context: ReleaseRiskAnalysisContext,
+) -> tuple[str, ...]:
+    evidence_ids = _require_string_list(payload, "evidence_ids")
+    available = {item.evidence_id for item in context.retrieval_evidence}
+    unknown = sorted(set(evidence_ids).difference(available))
+    if unknown:
+        raise ReleaseRiskAnalysisParseError(
+            "Field 'evidence_ids' contains IDs outside the supplied context."
+        )
+    if available and not evidence_ids:
+        raise ReleaseRiskAnalysisParseError(
+            "Field 'evidence_ids' must cite at least one supplied Evidence ID."
+        )
+    return evidence_ids
 
 
 def _require_string(

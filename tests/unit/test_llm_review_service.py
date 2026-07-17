@@ -21,6 +21,7 @@ def _response() -> str:
             "prioritized_risks": [],
             "fix_plan": [],
             "evidence_rule_ids": [],
+            "evidence_ids": [],
             "unsupported_claims": [],
             "missing_evidence_notes": [],
         }

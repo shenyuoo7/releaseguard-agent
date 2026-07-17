@@ -27,6 +27,9 @@ from releaseguard_agent.services import (
 from releaseguard_agent.services.agent_workflow_service import (
     ReleaseAgentWorkflowService,
 )
+from releaseguard_agent.services.verification_service import (
+    ReleaseVerificationService,
+)
 
 EXIT_SUCCESS = 0
 EXIT_BLOCKING_ISSUES = 1
@@ -141,6 +144,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     workflow_parser.set_defaults(handler=run_agent_review_command)
 
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="Compare a baseline project snapshot with a user-modified snapshot.",
+    )
+    verify_parser.add_argument("before_project_path")
+    verify_parser.add_argument("after_project_path")
+    verify_parser.add_argument("--skip-pytest-execution", action="store_true")
+    verify_parser.set_defaults(handler=run_verification_command)
+
     return parser
 
 
@@ -246,6 +258,20 @@ def run_agent_review_command(args: argparse.Namespace) -> int:
         TypeError,
         ValueError,
     ) as exc:
+        _print_error(str(exc))
+        return EXIT_USAGE_ERROR
+    print(json.dumps(result.to_dict(), indent=2))
+    return EXIT_SUCCESS if result.release_allowed else EXIT_BLOCKING_ISSUES
+
+
+def run_verification_command(args: argparse.Namespace) -> int:
+    try:
+        result = ReleaseVerificationService().verify(
+            before_project_path=Path(args.before_project_path),
+            after_project_path=Path(args.after_project_path),
+            include_pytest_execution=not args.skip_pytest_execution,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         _print_error(str(exc))
         return EXIT_USAGE_ERROR
     print(json.dumps(result.to_dict(), indent=2))

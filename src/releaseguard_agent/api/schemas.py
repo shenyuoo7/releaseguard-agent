@@ -69,7 +69,9 @@ class VerificationResponse(ApiModel):
     resolved: list[str]
     new: list[str]
     unchanged: list[str]
+    before_release_allowed: bool
     release_allowed: bool
+    route_history: list[str]
 
 
 class ApiErrorDetail(ApiModel):

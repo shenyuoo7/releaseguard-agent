@@ -140,22 +140,48 @@ def test_invalid_request_uses_uniform_error_shape(tmp_path: Path) -> None:
     assert "input" not in payload["error"]["details"][0]
 
 
-def test_verification_endpoint_is_truthful_until_m6(tmp_path: Path) -> None:
+def test_verification_endpoint_rescans_and_returns_before_after_delta(
+    tmp_path: Path,
+) -> None:
+    before = tmp_path / "before"
+    after = tmp_path / "after"
+    _create_reviewable_project(before)
+    _create_reviewable_project(after)
+    source_before = before / "src"
+    source_after = after / "src"
+    source_before.mkdir()
+    source_after.mkdir()
+    source_code = "from fastapi import FastAPI\napp = FastAPI()\n"
+    (source_before / "main.py").write_text(source_code, encoding="utf-8")
+    (source_after / "main.py").write_text(source_code, encoding="utf-8")
+    (after / "requirements.txt").write_text(
+        "pytest\nfastapi\n", encoding="utf-8"
+    )
     client = TestClient(create_app(allowed_project_roots=[tmp_path]))
 
     response = client.post(
         "/verifications",
         json={
-            "before_project_path": str(tmp_path / "before"),
-            "after_project_path": str(tmp_path / "after"),
+            "before_project_path": str(before),
+            "after_project_path": str(after),
             "include_pytest_execution": False,
         },
     )
 
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == (
-        "verification_not_implemented"
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "resolved"
+    assert payload["before_release_allowed"] is False
+    assert payload["release_allowed"] is True
+    assert any(
+        item.startswith("RG-FASTAPI-001::") for item in payload["resolved"]
     )
+    assert payload["new"] == []
+    assert payload["route_history"] == [
+        "scan",
+        "verifier_agent",
+        "verification_complete",
+    ]
 
 
 def test_openapi_lists_only_approved_first_api_routes(tmp_path: Path) -> None:

@@ -28,9 +28,20 @@ $body = @{
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/reviews -ContentType "application/json" -Body $body
 ```
 
-`POST /verifications` is present but returns `501` with code
-`verification_not_implemented`. M6 will replace that response with a real
-manual-edit before/after verification contract.
+`POST /verifications` performs a real synchronous comparison. The caller
+supplies a preserved baseline snapshot and a user-modified snapshot; the API
+rescans both and returns resolved, new, and unchanged finding IDs. ReleaseGuard
+never modifies either directory.
+
+```powershell
+$verification = @{
+    before_project_path = "E:\snapshots\project-before"
+    after_project_path = "E:\snapshots\project-after"
+    include_pytest_execution = $false
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/verifications -ContentType "application/json" -Body $verification
+```
 
 The module-level app allows only paths below the ReleaseGuard repository root.
 Embedding the app for another trusted root requires explicit construction:

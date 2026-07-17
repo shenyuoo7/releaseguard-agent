@@ -35,6 +35,7 @@ def _model_response() -> str:
                 }
             ],
             "evidence_rule_ids": ["RG-DEPS-001"],
+            "evidence_ids": [],
             "unsupported_claims": [],
             "missing_evidence_notes": [],
         }

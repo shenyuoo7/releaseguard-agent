@@ -132,16 +132,19 @@ src/releaseguard_agent/
 ```text
 START -> scan
 scan -> clean -> finalize_clean -> END
-scan -> blocking -> retrieve_evidence
-retrieve_evidence -> sufficient -> analyze_risk
-retrieve_evidence -> insufficient -> supplemental_retrieval
-supplemental_retrieval -> still insufficient -> manual_review -> END
-analyze_risk -> success/deterministic -> plan_fixes -> END
-analyze_risk -> LLM failure -> deterministic_fallback -> plan_fixes -> END
+scan -> blocking -> evidence_agent
+evidence_agent -> sufficient -> risk_agent
+evidence_agent -> insufficient after supplement -> manual_review -> END
+risk_agent -> success/deterministic -> fix_planner_agent -> END
+risk_agent -> LLM failure -> deterministic_fallback -> fix_planner_agent -> END
+scan with baseline -> verifier_agent
+verifier_agent -> fixed -> verification_complete -> END
+verifier_agent -> blockers remain -> evidence_agent -> risk/fix path
 ```
 
-The graph is not yet the M6 four-role workflow. Its nodes are role-neutral and
-share one explicit state. The deterministic `CheckResult.should_block_release`
+The graph has four role nodes with independent contracts: Evidence Agent, Risk
+Agent, Fix Planner Agent, and Verifier Agent. They share explicit graph state,
+not implicit global data. The deterministic `CheckResult.should_block_release`
 policy remains authoritative on every route.
 
 ## End-to-end CLI flow
@@ -512,10 +515,11 @@ POST /reviews
 POST /verifications
 ```
 
-`GET /health` and `POST /reviews` are operational. `POST /reviews` resolves the
-target through `ProjectPathPolicy` and delegates to `ReleaseReviewService`.
-`POST /verifications` returns a structured 501 until M6 implements a real
-before/after comparison; it is not counted as a completed repair loop.
+All three routes are operational. `POST /reviews` resolves the target through
+`ProjectPathPolicy` and delegates to `ReleaseReviewService`.
+`POST /verifications` path-checks two snapshots, scans both, invokes the
+Verifier Agent inside the graph, and returns resolved/new/unchanged findings
+plus the final after-scan decision.
 
 ### Plugin layer
 

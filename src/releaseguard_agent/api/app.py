@@ -23,6 +23,9 @@ from releaseguard_agent.services import (
     ReleaseReviewResult,
     ReleaseReviewService,
 )
+from releaseguard_agent.services.verification_service import (
+    ReleaseVerificationService,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -31,17 +34,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 def create_app(
     *,
     review_service: ReleaseReviewService | None = None,
+    verification_service: ReleaseVerificationService | None = None,
     allowed_project_roots: Iterable[Path] | None = None,
 ) -> FastAPI:
     """Build the synchronous ReleaseGuard API with explicit dependencies."""
     application = FastAPI(
         title="ReleaseGuard Agent API",
-        version="0.2.0",
+        version="0.3.0",
         description=(
             "Synchronous local API for deterministic pre-release reviews."
         ),
     )
     service = review_service or ReleaseReviewService()
+    verifier = verification_service or ReleaseVerificationService(
+        review_service=service
+    )
     path_policy = ProjectPathPolicy(
         allowed_project_roots or (PROJECT_ROOT,)
     )
@@ -98,22 +105,62 @@ def create_app(
     @application.post(
         "/verifications",
         response_model=VerificationResponse,
-        responses={501: {"model": ApiErrorResponse}},
+        responses={
+            400: {"model": ApiErrorResponse},
+            403: {"model": ApiErrorResponse},
+            404: {"model": ApiErrorResponse},
+            422: {"model": ApiErrorResponse},
+        },
     )
     def create_verification(
-        _request: VerificationRequest,
+        request: VerificationRequest,
     ) -> VerificationResponse:
-        raise ApiError(
-            status_code=501,
-            code="verification_not_implemented",
-            message=(
-                "Before/after verification is introduced in milestone M6; "
-                "the API does not pretend that a second review is a verified "
-                "repair loop."
+        before_path = _resolve_api_path(
+            path_policy, request.before_project_path
+        )
+        after_path = _resolve_api_path(path_policy, request.after_project_path)
+        try:
+            result = verifier.verify(
+                before_project_path=before_path,
+                after_project_path=after_path,
+                include_pytest_execution=request.include_pytest_execution,
+            )
+        except InvalidProjectPathError as exc:
+            missing = not before_path.exists() or not after_path.exists()
+            raise ApiError(
+                status_code=404 if missing else 400,
+                code=(
+                    "project_path_not_found" if missing else "project_path_invalid"
+                ),
+                message=str(exc),
+            ) from exc
+        return VerificationResponse(
+            status=result.delta.status,
+            resolved=list(result.delta.resolved),
+            new=list(result.delta.new),
+            unchanged=list(result.delta.unchanged),
+            before_release_allowed=result.delta.before_release_allowed,
+            release_allowed=result.delta.release_allowed,
+            route_history=list(
+                result.after_workflow.state.get("route_history", [])
             ),
         )
 
     return application
+
+
+def _resolve_api_path(
+    policy: ProjectPathPolicy,
+    raw_path: str,
+) -> Path:
+    try:
+        return policy.resolve_allowed(raw_path)
+    except ProjectPathNotAllowedError as exc:
+        raise ApiError(
+            status_code=403,
+            code="project_path_not_allowed",
+            message=str(exc),
+        ) from exc
 
 
 def _review_response(result: ReleaseReviewResult) -> ReviewResponse:

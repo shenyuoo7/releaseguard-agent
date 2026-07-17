@@ -1,6 +1,6 @@
 # ReleaseGuard Agent Implementation Status
 
-Last verified: 2026-07-17 (M5)
+Last verified: 2026-07-17 (M6)
 
 This page is the evidence-backed status of the local repository. A directory,
 class name, roadmap item, or resume keyword is not treated as implemented
@@ -57,12 +57,12 @@ still insufficient, and route LLM failures through a deterministic fallback.
 | Optional LLM risk analysis | COMPLETE | CLI can enrich an existing deterministic review through `LLMReviewService`; FakeLLM covers the product path offline and deterministic facts remain authoritative. |
 | OpenAI-compatible adapter | COMPLETE | Explicit provider/model/base URL/timeout environment configuration builds the lazy SDK adapter; missing key falls back to deterministic mode and errors are sanitized. Real network interoperability is optional and not asserted by offline tests. |
 | Trace | PARTIAL | CLI run arguments, inputs, outputs, environment summary, and decision summary are recorded; graph/tool/retrieval/LLM events are not. |
-| Unit and integration tests | COMPLETE | 301 unit tests and 21 CLI/API integration tests pass at M5. |
+| Unit and integration tests | COMPLETE | 307 unit tests and 21 CLI/API integration tests pass at M6. |
 | E2E and eval system | PARTIAL | A real Uvicorn health smoke test exists; retrieval/Agent eval metrics do not. |
-| FastAPI product API | PARTIAL | `GET /health` and `POST /reviews` are real synchronous routes using `ReleaseReviewService`; `POST /verifications` intentionally returns structured 501 until M6 adds before/after semantics. |
+| FastAPI product API | COMPLETE | `GET /health`, `POST /reviews`, and `POST /verifications` are real synchronous routes with strict schemas, safe path policy, uniform errors, TestClient integration, and Uvicorn health smoke coverage. |
 | Agent tools and LangGraph | COMPLETE | Reachable tool wrappers are called by a typed `StateGraph`; the graph has normal and conditional edges, is compiled, invoked by a service and CLI, and has four distinct tested routes. |
-| Role-based multi-agent workflow | MISSING | Evidence, Risk, Fix Planner, and Verifier roles are planned only. |
-| User-applied-fix verification | MISSING | No baseline run comparison or rescan verification service exists. |
+| Role-based multi-agent workflow | COMPLETE | Evidence, Risk, Fix Planner, and Verifier have independent input/output dataclasses, execute as distinct graph nodes, and transfer typed state. One LLM instance may be shared, but deterministic policy resolves conflicts. |
+| User-applied-fix verification | COMPLETE | CLI/API call `ReleaseVerificationService`, scan separate before/after snapshots, run the Verifier Agent, report resolved/new/unchanged, and use the after scan for the final decision. No repository is modified. |
 | Docker packaging and GitHub Actions | MISSING | No product Dockerfile or `.github/workflows` CI exists. |
 
 ## Current main flow
@@ -194,6 +194,19 @@ M5 verification:
 | Ruff | Passed |
 | Mypy | 74 source files, no issues |
 
+M6 verification:
+
+| Suite/check | Result |
+| --- | --- |
+| Role/verification/LLM/API focused selection | 39 passed |
+| Additional role delta selection | 3 passed |
+| `tests/unit` | 307 passed |
+| `tests/integration` | 21 passed |
+| `tests/e2e` | 1 passed |
+| Full suite | 329 passed |
+| Ruff | Passed |
+| Mypy | 76 source files, no issues |
+
 ## Known risks
 
 - The declared OpenAI SDK is installed in the project `.venv`, but installing
@@ -201,8 +214,8 @@ M5 verification:
   integration is complete.
 - The API defaults to reviewing paths under the repository root. Other trusted
   roots require explicit `create_app(allowed_project_roots=...)` configuration.
-- `POST /verifications` exists only to make the approved surface explicit and
-  returns 501; it must not be described as a repair-verification loop before M6.
+- Verification is synchronous and stateless: callers must preserve and submit
+  both baseline and modified snapshots; ReleaseGuard does not persist runs.
 - Real OpenAI-compatible network execution remains unverified and must be
   explicit and opt-in; offline FakeLLM/fake-SDK tests do not establish provider
   availability or semantic answer quality.
@@ -215,9 +228,6 @@ M5 verification:
   semantic quality or availability of a real embedding endpoint.
 - The current reranker is transparent deterministic token overlap rather than
   a learned cross-encoder.
-- The M5 graph uses functional role-neutral nodes. It must not be described as
-  the final four-role multi-agent system until M6 adds independent contracts
-  and verifier state transfer.
 - There is no coverage percentage, retrieval benchmark, Agent eval,
   Linux CI result, or container smoke test.
 
@@ -231,7 +241,7 @@ M5 verification:
 | M3 | Production OpenAI-compatible provider configuration | Complete and offline verified |
 | M4 | BM25, vector retrieval, fusion, and reranking | Complete and verified locally |
 | M5 | Agent tools and LangGraph conditional workflow | Complete and verified locally |
-| M6 | Role-based Agents and user-applied-fix verification | Not started |
+| M6 | Role-based Agents and user-applied-fix verification | Complete and verified locally |
 | M7 | Execution-level trace and minimum evals | Not started |
 | M8 | Docker, GitHub Actions, documentation, and interview training | Not started |
 
@@ -253,11 +263,11 @@ next milestone automatically and never pushes to a remote.
 | LLM API | COMPLETE | Configurable optional CLI path and safe no-key deterministic fallback are code/test backed; real provider calls remain opt-in and environment-dependent. |
 | Agent decision | PARTIAL | Deterministic advice is product-wired; standalone single-LLM analysis is not. |
 | Structured reports | COMPLETE | Report, checklist, deterministic advice, and run trace artifacts. |
-| FastAPI API | PARTIAL | Health and review are reachable and tested through TestClient and Uvicorn; verification is explicitly unavailable until M6. |
+| FastAPI API | COMPLETE | Health, review, and before/after verification are synchronous, reachable, path-checked, and covered by TestClient; health also has a real Uvicorn smoke test. |
 | BM25/vector/rerank/LlamaIndex | COMPLETE | Reachable exact/BM25/vector/hybrid service and CLI; LlamaIndex owns vector indexing, candidates are fused/deduplicated, and a deterministic reranker produces final scores. |
 | Agent tools/LangGraph | COMPLETE | Real tool invocations and a compiled `StateGraph` with normal/conditional edges and tested clean, blocking, evidence-gap, and LLM-fallback routes. |
-| Multi-agent workflow | MISSING | Planned role nodes: Evidence, Risk, Fix Planner, and Verifier. |
-| Complete repair loop | MISSING | Planned manual-edit rescan and before/after comparison; no automatic edits. |
+| Multi-agent workflow | COMPLETE | Four role Agents have separate contracts and graph nodes; state and Evidence IDs are explicit, and deterministic policy wins conflicts. |
+| Complete repair loop | COMPLETE | Scan, evidence, decision, fix plan, user manual edit, rescan, Verifier before/after delta, and final deterministic decision are reachable; no automatic edits. |
 | Linux/GitHub Actions | MISSING | Planned for M8. |
 
 Until a later milestone changes this page with code and test evidence, missing

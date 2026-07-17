@@ -120,6 +120,7 @@ def _analysis_result(tmp_path: Path):
                         }
                     ],
                     "evidence_rule_ids": ["RG-DOCKER-003"],
+                    "evidence_ids": [],
                     "unsupported_claims": [],
                     "missing_evidence_notes": [],
                 }

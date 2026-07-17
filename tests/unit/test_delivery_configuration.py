@@ -51,3 +51,13 @@ def test_linux_ci_runs_quality_tests_eval_and_container_smoke() -> None:
         "http_health_smoke.py",
     ):
         assert required in commands
+
+
+def test_windows_batch_entry_is_a_thin_cli_passthrough() -> None:
+    batch = (PROJECT_ROOT / "ReleaseGuard.bat").read_text(encoding="utf-8")
+
+    assert "%~dp0" in batch
+    assert ".venv\\Scripts\\python.exe" in batch
+    assert "releaseguard_agent.cli.main %*" in batch
+    assert "exit /b %ERRORLEVEL%" in batch
+    assert "RELEASEGUARD_LLM" not in batch

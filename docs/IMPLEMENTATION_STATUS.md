@@ -57,13 +57,15 @@ still insufficient, and route LLM failures through a deterministic fallback.
 | Optional LLM risk analysis | COMPLETE | CLI can enrich an existing deterministic review through `LLMReviewService`; FakeLLM covers the product path offline and deterministic facts remain authoritative. |
 | OpenAI-compatible adapter | COMPLETE | Explicit provider/model/base URL/timeout environment configuration builds the lazy SDK adapter; missing key falls back to deterministic mode and errors are sanitized. Real network interoperability is optional and not asserted by offline tests. |
 | Trace | COMPLETE | Existing run traces remain available; Agent and verification flows additionally record redacted node/tool/retrieval/LLM events, route history, provenance IDs, latency, optional token usage, artifacts, errors, and before/after deltas. |
-| Unit and integration tests | COMPLETE | 315 unit tests and 21 CLI/API integration tests pass at M8. |
+| Unit and integration tests | COMPLETE | 316 unit tests and 21 CLI/API integration tests pass at final closeout. |
 | E2E and eval system | COMPLETE | A real Uvicorn health smoke test and a fixed offline golden-case eval cover six required metrics. FakeLLM/fixed embeddings prove repeatability and wiring, not provider or semantic quality. |
 | FastAPI product API | COMPLETE | `GET /health`, `POST /reviews`, and `POST /verifications` are real synchronous routes with strict schemas, safe path policy, uniform errors, TestClient integration, and Uvicorn health smoke coverage. |
 | Agent tools and LangGraph | COMPLETE | Reachable tool wrappers are called by a typed `StateGraph`; the graph has normal and conditional edges, is compiled, invoked by a service and CLI, and has four distinct tested routes. |
 | Role-based multi-agent workflow | COMPLETE | Evidence, Risk, Fix Planner, and Verifier have independent input/output dataclasses, execute as distinct graph nodes, and transfer typed state. One LLM instance may be shared, but deterministic policy resolves conflicts. |
 | User-applied-fix verification | COMPLETE | CLI/API call `ReleaseVerificationService`, scan separate before/after snapshots, run the Verifier Agent, report resolved/new/unchanged, and use the after scan for the final decision. No repository is modified. |
-| Docker packaging and GitHub Actions | PARTIAL | The non-root demo Dockerfile, health smoke script, and Ubuntu Actions workflow are implemented and statically tested. The local Docker daemon was unavailable and no remote workflow was triggered, so runtime status remains unverified. |
+| Docker packaging | COMPLETE | The non-root demo image builds on Docker Desktop/Linux, serves all three API endpoints, runs as UID 10001, and reaches Docker health `healthy`. It remains a demo image, not an untrusted-code sandbox. |
+| GitHub Actions | PARTIAL | The Ubuntu workflow is implemented and locally parsed/tested. Remote execution is pending the first push of `yin/releaseguard-complete`. |
+| Windows batch entry | COMPLETE | Root `ReleaseGuard.bat` is a thin `.venv`-based CLI passthrough that preserves CLI arguments and exit codes. |
 
 ## Current main flow
 
@@ -224,16 +226,16 @@ M8 verification:
 
 | Suite/check | Result |
 | --- | --- |
-| Docker/CI/smoke focused selection | 3 passed |
-| `tests/unit` | 315 passed |
+| Docker/CI/smoke focused selection | 4 passed |
+| `tests/unit` | 316 passed |
 | `tests/integration` | 21 passed |
 | `tests/e2e` | 1 passed |
-| Full suite | 337 passed |
+| Full suite | 338 passed |
 | Offline golden eval | Six required metrics = 1.0 on fixed cases |
 | Ruff | Passed |
 | Mypy | 79 source files, no issues |
-| Docker build/health | Attempted; Docker Desktop Linux daemon unavailable, so build and health were not executed |
-| Remote GitHub Actions | Not run: no push was authorized |
+| Docker build/health | Passed: image built, API health/review/verification passed, UID 10001, Docker health `healthy` |
+| Remote GitHub Actions | Pending the authorized push of `yin/releaseguard-complete` |
 
 ## Known risks
 
@@ -263,9 +265,9 @@ M8 verification:
 - The golden eval is intentionally small. A perfect score on its fixed cases
   does not establish broad retrieval, LLM, or production embedding quality.
 - There is no coverage percentage or remote Linux CI result.
-- Docker configuration and smoke commands are tested statically, but the local
-  Docker Desktop Linux daemon was unavailable. Image build and container health
-  remain unverified on this workstation.
+- Docker has been validated locally on Docker Desktop/Linux. This does not
+  establish behavior on every Docker Engine version or provide untrusted-code
+  isolation.
 
 ## Approved M0-M8 route
 
@@ -279,7 +281,7 @@ M8 verification:
 | M5 | Agent tools and LangGraph conditional workflow | Complete and verified locally |
 | M6 | Role-based Agents and user-applied-fix verification | Complete and verified locally |
 | M7 | Execution-level trace and minimum evals | Complete and verified locally |
-| M8 | Docker, GitHub Actions, documentation, and interview training | Implementation complete; local Docker and remote Actions execution unverified |
+| M8 | Docker, GitHub Actions, documentation, and interview training | Implementation and local Docker verification complete; remote Actions pending |
 
 Every milestone is independently implemented, verified, reviewed, documented,
 and saved as a local checkpoint. The approved completion run continues to the
@@ -291,7 +293,7 @@ next milestone automatically and never pushes to a remote.
 | --- | --- | --- |
 | Python release review | COMPLETE | Deterministic Python release-readiness CLI and tests. |
 | FastAPI and Flask support | PARTIAL | Static project detection and selected release checks. |
-| Docker | PARTIAL | Target-project inspection and a non-root ReleaseGuard demo image are implemented; local image build is still unverified because the daemon was unavailable. |
+| Docker | COMPLETE | Target-project inspection and a locally validated non-root ReleaseGuard demo image are implemented; it is not a production sandbox. |
 | Pytest | COMPLETE | Test structure/configuration checks, optional execution, and project test suite. |
 | Checker framework | COMPLETE | Registered checker execution with structured results and error isolation. |
 | Rule knowledge base | COMPLETE | The current release-rule scope has structured rule metadata, local trusted-source documents, and provenance-preserving chunks. |

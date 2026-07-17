@@ -1,5 +1,17 @@
 # ReleaseGuard Agent CLI Usage
 
+## Minimal Windows entry point
+
+From the repository root, the shortest supported command is:
+
+```powershell
+.\ReleaseGuard.bat check sample_projects\clean_python_project --skip-pytest-execution
+```
+
+The batch file locates `.venv\Scripts\python.exe`, sets `PYTHONPATH=src`,
+forwards all arguments to `releaseguard_agent.cli.main`, and preserves the CLI
+exit code. It contains no Checker, RAG, Agent, or report business logic.
+
 This document explains how to run the current ReleaseGuard Agent CLI and
 inspect generated release-readiness artifacts.
 

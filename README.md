@@ -53,6 +53,16 @@ A full CLI run can generate the following files:
 From the repository root:
 
 ```powershell
+.\ReleaseGuard.bat check sample_projects\clean_python_project --skip-pytest-execution
+```
+
+`ReleaseGuard.bat` is a thin Windows entry point that uses the project `.venv`
+and forwards every argument and exit code to the real Python CLI. Running it
+without arguments shows CLI help.
+
+The equivalent direct Python command is:
+
+```powershell
 $env:PYTHONPATH = "src"
 .venv\Scripts\python.exe -m releaseguard_agent.cli.main check sample_projects\clean_python_project --format json --output-dir outputs\demo-report --checklist-output-dir outputs\demo-checklist --agent-advice-output-dir outputs\demo-advice --trace-output-dir outputs\demo-trace
 ```
@@ -251,10 +261,10 @@ against a real embedding model. Agent-callable tools and a compiled LangGraph
 conditional workflow are implemented. Evidence, Risk, Fix Planner, and Verifier
 are separate role nodes with typed state transfer; LLM output must cite supplied
 Evidence IDs and cannot override deterministic blocking facts. Execution-level
-trace and a fixed offline eval suite are implemented. A non-root local Docker
-demo and Ubuntu GitHub Actions workflow cover API health, tests, Eval, lint,
-types, and container smoke. Local Docker execution and remote Actions status
-are reported separately from configuration existence. The eval's fake
+trace and a fixed offline eval suite are implemented. The non-root local Docker
+demo has passed image, API, user-ID, and Docker health checks. The Ubuntu
+GitHub Actions workflow covers tests, Eval, lint, types, and container smoke;
+its remote run status is reported separately. The eval's fake
 embeddings validate repeatability and integration mechanics, not real
 semantic-search quality. See the implementation status page for the
 evidence-backed boundary.

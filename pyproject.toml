@@ -13,4 +13,3 @@ no_implicit_optional = true
 show_error_codes = true
 warn_redundant_casts = true
 warn_unused_ignores = true
-cache_dir = "E:/A_project/Agent/ReleaseGuard_Agent_milestone_temp/mypy-cache"

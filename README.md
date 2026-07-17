@@ -13,9 +13,9 @@ Phase 1 focuses on Python projects, including:
 - `fastapi`
 - `flask`
 
-The CLI is the only current product entry point. Standalone LLM analysis code
-and an OpenAI-compatible provider adapter exist, but neither is connected to
-the CLI or another product entry point.
+The CLI and synchronous FastAPI app are current product entry points. Both use
+`ReleaseReviewService`. Standalone LLM analysis code and an OpenAI-compatible
+provider adapter exist, but neither is connected to these product flows.
 
 ## What it checks today
 
@@ -169,6 +169,7 @@ More detailed documentation is available in:
 
 - [Current implementation status](docs/IMPLEMENTATION_STATUS.md)
 - [CLI usage](docs/usage/cli.md)
+- [Synchronous API usage](docs/usage/api.md)
 - [Current architecture](docs/architecture/current-architecture.md)
 
 ## Current project status
@@ -176,11 +177,13 @@ More detailed documentation is available in:
 The project currently has a working CLI path for Python/FastAPI/Flask
 release-readiness review, deterministic rule evidence enrichment, release
 decision advice, report artifacts, checklist artifacts, and trace artifacts.
-The CLI delegates scanning and artifact orchestration to the shared
-`ReleaseReviewService`; no FastAPI product endpoint exists yet.
+The CLI and `POST /reviews` delegate scanning to the shared
+`ReleaseReviewService`. `GET /health` is also operational. The verification
+route remains explicitly unavailable until M6 supplies real before/after
+semantics.
 
 The current rule lookup is exact and local; it is not BM25, vector retrieval,
-or hybrid RAG. FastAPI service endpoints, LangGraph, role-based multi-agent
-orchestration, automatic post-fix verification, Docker packaging, and GitHub
+or hybrid RAG. Production LLM wiring, LangGraph, role-based multi-agent
+orchestration, post-fix verification semantics, Docker packaging, and GitHub
 Actions remain planned work. See the implementation status page for the
 evidence-backed boundary.

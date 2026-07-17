@@ -1,6 +1,6 @@
 # ReleaseGuard Agent Implementation Status
 
-Last verified: 2026-07-17 (M1)
+Last verified: 2026-07-17 (M2)
 
 This page is the evidence-backed status of the local repository. A directory,
 class name, roadmap item, or resume keyword is not treated as implemented
@@ -8,11 +8,12 @@ unless reachable code and tests support it.
 
 ## Current product boundary
 
-The only current product entry point is the CLI:
+The current product entry points are the CLI and a synchronous FastAPI app:
 
 ```powershell
 $env:PYTHONPATH = "src"
 .\.venv\Scripts\python.exe -m releaseguard_agent.cli.main
+.\.venv\Scripts\python.exe -m uvicorn releaseguard_agent.api.app:app --host 127.0.0.1 --port 8000
 ```
 
 The CLI delegates its business workflow to `ReleaseReviewService`. The service
@@ -42,9 +43,9 @@ key and must not make an LLM network request.
 | Standalone LLM risk analysis | PARTIAL | Agent, writer, and service exist and use injected clients, but no product entry point calls them. |
 | OpenAI-compatible adapter | PARTIAL | SDK adapter, configurable model/base URL/timeout, sanitized project exceptions, and fake-SDK tests exist; environment configuration and product wiring do not. |
 | Trace | PARTIAL | CLI run arguments, inputs, outputs, environment summary, and decision summary are recorded; graph/tool/retrieval/LLM events are not. |
-| Unit and integration tests | COMPLETE | Unit tests and 13 CLI sample-project integration tests exist. |
-| E2E and eval system | MISSING | `tests/e2e` and `evals` do not contain complete executable suites or quality metrics. |
-| FastAPI product API | MISSING | No `FastAPI()` application or product routes exist. |
+| Unit and integration tests | COMPLETE | 273 unit tests and 21 CLI/API integration tests pass at M2. |
+| E2E and eval system | PARTIAL | A real Uvicorn health smoke test exists; retrieval/Agent eval metrics do not. |
+| FastAPI product API | PARTIAL | `GET /health` and `POST /reviews` are real synchronous routes using `ReleaseReviewService`; `POST /verifications` intentionally returns structured 501 until M6 adds before/after semantics. |
 | Agent tools and LangGraph | MISSING | No tool registry/executor, graph state, `StateGraph`, nodes, edges, or compiled workflow exists. |
 | Role-based multi-agent workflow | MISSING | Evidence, Risk, Fix Planner, and Verifier roles are planned only. |
 | User-applied-fix verification | MISSING | No baseline run comparison or rescan verification service exists. |
@@ -53,7 +54,7 @@ key and must not make an LLM network request.
 ## Current main flow
 
 ```text
-CLI
+CLI or POST /reviews
 -> ReleaseReviewService
 -> default checker composition
 -> CheckerRunner
@@ -118,6 +119,18 @@ M1 verification added five tests and established lint/type-check commands:
 | Ruff (`src tests`) | Passed |
 | Mypy (`src/releaseguard_agent`) | 57 source files, no issues |
 
+M2 verification:
+
+| Suite/check | Result |
+| --- | --- |
+| API focused including real Uvicorn smoke | 14 passed |
+| `tests/unit` | 273 passed |
+| `tests/integration` | 21 passed |
+| `tests/e2e` | 1 passed |
+| Full suite | 295 passed |
+| Ruff (`src tests`) | Passed |
+| Mypy (`src/releaseguard_agent`) | 61 source files, no issues |
+
 ## Known risks
 
 - The declared OpenAI SDK is installed in the project `.venv`, but installing
@@ -125,6 +138,10 @@ M1 verification added five tests and established lint/type-check commands:
   integration is complete.
 - No environment-driven provider factory exists, and the adapter is not wired
   into the CLI or `ReleaseRiskAnalysisService`.
+- The API defaults to reviewing paths under the repository root. Other trusted
+  roots require explicit `create_app(allowed_project_roots=...)` configuration.
+- `POST /verifications` exists only to make the approved surface explicit and
+  returns 501; it must not be described as a repair-verification loop before M6.
 - Real OpenAI-compatible network execution remains unverified and must be
   explicit in a later milestone.
 - The repository does not have installable package metadata. Direct CLI use
@@ -141,7 +158,7 @@ M1 verification added five tests and established lint/type-check commands:
 | --- | --- | --- |
 | M0 | Truthful baseline and repository hygiene | Complete; checkpoint `f0402cb` |
 | M1 | Unified `ReleaseReviewService` | Complete and verified locally |
-| M2 | FastAPI and shared CLI/API use | Not started |
+| M2 | FastAPI and shared CLI/API use | Complete and verified locally; verification semantics deferred to M6 |
 | M3 | Production OpenAI-compatible provider configuration | Not started |
 | M4 | BM25, vector retrieval, fusion, and reranking | Not started |
 | M5 | Agent tools and LangGraph conditional workflow | Not started |
@@ -167,7 +184,7 @@ next milestone automatically and never pushes to a remote.
 | LLM API | PARTIAL | Offline-tested provider adapter exists but is not configured or product-wired. |
 | Agent decision | PARTIAL | Deterministic advice is product-wired; standalone single-LLM analysis is not. |
 | Structured reports | COMPLETE | Report, checklist, deterministic advice, and run trace artifacts. |
-| FastAPI API | MISSING | Planned synchronous `/health`, `/reviews`, and `/verifications` endpoints. |
+| FastAPI API | PARTIAL | Health and review are reachable and tested through TestClient and Uvicorn; verification is explicitly unavailable until M6. |
 | BM25/vector/rerank/LlamaIndex | MISSING | Planned for M4. |
 | Agent tools/LangGraph | MISSING | Planned for M5. |
 | Multi-agent workflow | MISSING | Planned role nodes: Evidence, Risk, Fix Planner, and Verifier. |

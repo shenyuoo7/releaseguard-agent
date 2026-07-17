@@ -2,7 +2,7 @@
 
 This document describes the current architecture of ReleaseGuard Agent.
 
-ReleaseGuard Agent is currently a CLI-first pre-release review system for
+ReleaseGuard Agent is currently a CLI-and-API pre-release review system for
 Python, FastAPI, and Flask projects. It runs deterministic release-readiness
 checks, enriches findings with local rule evidence, produces deterministic
 release decision advice, and writes review artifacts for humans and automation.
@@ -28,11 +28,12 @@ Not supported in phase one:
 - Mobile projects
 - Embedded projects
 
-Current entry point:
+Current entry points:
 
 ```powershell
 $env:PYTHONPATH = "src"
 .venv\Scripts\python.exe -m releaseguard_agent.cli.main
+.venv\Scripts\python.exe -m uvicorn releaseguard_agent.api.app:app --host 127.0.0.1 --port 8000
 ```
 
 The project does not yet have installable package metadata, so direct CLI use
@@ -43,8 +44,10 @@ from a fresh PowerShell session requires `PYTHONPATH=src`.
 ```mermaid
 flowchart TD
     User["User runs CLI command"] --> CLI["cli/main.py"]
+    APIUser["Local API client"] --> API["api/app.py"]
 
     CLI --> Service["services/release_review_service.py"]
+    API --> Service
     Service --> RunnerFactory["core/default_checkers.py"]
     RunnerFactory --> Runner["core/checker_runner.py"]
 
@@ -108,7 +111,7 @@ src/releaseguard_agent/
 | `agents/` | Deterministic release decision synthesis, explanation, advice service, and advice writers. |
 | `reports/` | Markdown/JSON release reports and release checklist artifact writers. |
 | `observability/` | Deterministic trace artifact writer. |
-| `api/` | Reserved for future FastAPI API layer. |
+| `api/` | Synchronous FastAPI routes, strict request/response models, path policy, and uniform errors. |
 | `plugins/` | Reserved for future ecosystem/plugin expansion. |
 | `memory/` | Reserved for future run history or memory-related features. |
 | `services/` | Reserved for future service orchestration layer. |
@@ -461,19 +464,24 @@ The architecture reserves space for future expansion.
 
 ### API layer
 
-Reserved package:
+Implemented package:
 
 ```text
 src/releaseguard_agent/api/
 ```
 
-Planned synchronous API endpoints from the approved project boundary:
+Current synchronous API endpoints:
 
 ```text
 GET /health
 POST /reviews
 POST /verifications
 ```
+
+`GET /health` and `POST /reviews` are operational. `POST /reviews` resolves the
+target through `ProjectPathPolicy` and delegates to `ReleaseReviewService`.
+`POST /verifications` returns a structured 501 until M6 implements a real
+before/after comparison; it is not counted as a completed repair loop.
 
 ### Plugin layer
 
@@ -555,7 +563,7 @@ Integration tests cover:
 ReleaseGuard Agent currently follows this architecture:
 
 ```text
-CLI
+CLI or FastAPI `/reviews`
  -> ReleaseReviewService
  -> default checker runner
  -> deterministic checkers

@@ -1,7 +1,7 @@
 # ReleaseGuard Agent
 
-ReleaseGuard Agent is currently a CLI-first pre-release review system that is
-being developed toward a multi-agent RAG system for software release review.
+ReleaseGuard Agent is a deterministic-first, role-based multi-agent RAG system
+for pre-release software review.
 
 It scans a project before release, runs deterministic release-readiness checks,
 enriches findings with rule evidence, and writes human-readable and
@@ -13,10 +13,10 @@ Phase 1 focuses on Python projects, including:
 - `fastapi`
 - `flask`
 
-The CLI and synchronous FastAPI app are current product entry points. Both use
-`ReleaseReviewService`. Standalone LLM analysis code and an OpenAI-compatible
-provider adapter are available through an explicit optional CLI flag; normal
-CLI/API reviews remain deterministic and offline.
+The CLI and synchronous FastAPI app are product entry points. Both reuse the
+same review service. An OpenAI-compatible provider is explicit opt-in; normal
+CLI/API reviews, graph execution, and the golden eval work without credentials
+or network access.
 
 ## What it checks today
 
@@ -148,6 +148,8 @@ Run the conditional LangGraph workflow in deterministic mode:
 
 This command uses real graph nodes and conditional edges. `--enable-llm` is
 explicit opt-in; without it, risk explanation and fix planning stay offline.
+Add `--execution-trace-output-dir outputs\agent-trace` to persist the redacted
+node/tool/retrieval/LLM event stream.
 
 Compare a baseline snapshot with a user-modified snapshot:
 
@@ -157,6 +159,27 @@ Compare a baseline snapshot with a user-modified snapshot:
 
 ReleaseGuard never applies the change. It rescans both snapshots and reports
 resolved, new, and unchanged findings.
+
+Run the reproducible offline eval:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main evaluate
+```
+
+## Docker demo
+
+Build and run the local demonstration API image:
+
+```powershell
+docker build --tag releaseguard-agent:local .
+docker run --detach --name releaseguard-demo --publish 8000:8000 releaseguard-agent:local
+.venv\Scripts\python.exe scripts\http_health_smoke.py
+docker rm --force releaseguard-demo
+```
+
+The image runs as a non-root user, defaults to deterministic mode, contains
+the local rule corpus and sample projects, and is intended for demonstration
+and CI smoke tests. It is not a sandbox for executing untrusted repositories.
 
 ## Exit codes
 
@@ -172,6 +195,13 @@ Run the full test suite:
 
 ```powershell
 .venv\Scripts\python.exe -m pytest
+```
+
+Run quality and type checks:
+
+```powershell
+.venv\Scripts\python.exe -m ruff check src tests scripts
+.venv\Scripts\python.exe -m mypy src\releaseguard_agent
 ```
 
 Run CLI-focused tests:
@@ -199,6 +229,7 @@ More detailed documentation is available in:
 - [Current implementation status](docs/IMPLEMENTATION_STATUS.md)
 - [CLI usage](docs/usage/cli.md)
 - [Synchronous API usage](docs/usage/api.md)
+- [Docker demo](docs/usage/docker.md)
 - [Current architecture](docs/architecture/current-architecture.md)
 
 ## Current project status
@@ -220,7 +251,10 @@ against a real embedding model. Agent-callable tools and a compiled LangGraph
 conditional workflow are implemented. Evidence, Risk, Fix Planner, and Verifier
 are separate role nodes with typed state transfer; LLM output must cite supplied
 Evidence IDs and cannot override deterministic blocking facts. Execution-level
-trace and a fixed offline eval suite are implemented. Docker packaging and
-GitHub Actions remain planned work. The eval's fake embeddings validate
-repeatability and integration mechanics, not real semantic-search quality. See
-the implementation status page for the evidence-backed boundary.
+trace and a fixed offline eval suite are implemented. A non-root local Docker
+demo and Ubuntu GitHub Actions workflow cover API health, tests, Eval, lint,
+types, and container smoke. Local Docker execution and remote Actions status
+are reported separately from configuration existence. The eval's fake
+embeddings validate repeatability and integration mechanics, not real
+semantic-search quality. See the implementation status page for the
+evidence-backed boundary.

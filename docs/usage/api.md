@@ -35,8 +35,8 @@ never modifies either directory.
 
 ```powershell
 $verification = @{
-    before_project_path = "E:\snapshots\project-before"
-    after_project_path = "E:\snapshots\project-after"
+    before_project_path = "E:\A_project\Agent\ReleaseGuard_Agent\sample_projects\fastapi_bad_project"
+    after_project_path = "E:\A_project\Agent\ReleaseGuard_Agent\sample_projects\fastapi_good_project"
     include_pytest_execution = $false
 } | ConvertTo-Json
 

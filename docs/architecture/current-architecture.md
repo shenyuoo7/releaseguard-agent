@@ -78,6 +78,11 @@ flowchart TD
     ChecklistWriter --> ChecklistArtifact["release_checklist.md"]
     AdviceWriter --> AdviceArtifacts["release_decision_advice.md + release_decision_advice.json"]
     TraceWriter --> TraceArtifact["trace.json"]
+    GraphService --> ExecutionTracer["observability/execution_trace.py"]
+    ExecutionTracer --> ExecutionTrace["execution_trace.json"]
+    Eval["evaluation/EvaluationRunner"] --> HybridRAG
+    Eval --> GraphService
+    Container["Docker / Uvicorn"] --> API
 ```
 
 ## Main package layout
@@ -339,26 +344,31 @@ duplicating file parsing logic.
 Important files:
 
 ```text
-src/releaseguard_agent/rag/rule_index_retriever.py
+src/releaseguard_agent/rag/corpus.py
+src/releaseguard_agent/rag/retrieval_service.py
+src/releaseguard_agent/rag/hybrid_retriever.py
+src/releaseguard_agent/rag/vector_retriever.py
 src/releaseguard_agent/rag/check_result_enricher.py
-src/releaseguard_agent/models/rule_evidence.py
+src/releaseguard_agent/models/retrieval_evidence.py
 ```
 
-The current RAG layer is deterministic and local.
-
-It does not use embeddings, a vector database, semantic search, or network
-retrieval.
+The RAG layer loads structured local rule chunks with trusted source metadata.
+It supports exact rule-ID lookup, `rank_bm25` Top-K retrieval, LlamaIndex
+`VectorStoreIndex` retrieval, and hybrid reciprocal-rank fusion followed by
+chunk deduplication and deterministic token-overlap reranking.
 
 Current behavior:
 
-1. Load local release rule knowledge.
-2. Retrieve rule evidence by exact `rule_id`.
-3. Attach rule evidence to check results.
-4. Preserve provenance such as source documents, source URLs, and
-   knowledge-file paths.
+1. Load and chunk local release rules and trusted-source records.
+2. Retrieve through exact, BM25, vector, or hybrid mode.
+3. Fuse and deduplicate hybrid candidates, then rerank deterministically.
+4. Return Evidence with rule ID, source URL, local source, chunk ID, retrieval
+   method, raw score, fusion score, and rerank score.
+5. Attach exact evidence to deterministic review findings.
 
-This layer prepares the project for future RAG/LLM use without requiring
-non-deterministic behavior today.
+Vector/hybrid mode requires an explicit embedding provider. Without one, the
+product reports degradation and falls back to BM25 without a network request.
+Offline fixed embeddings validate plumbing, not semantic quality.
 
 ## Agent release decision layer
 
@@ -380,10 +390,10 @@ src/releaseguard_agent/llm/fake_client.py
 src/releaseguard_agent/llm/openai_client.py
 ```
 
-The CLI-connected Agent decision layer is deterministic and does not call an
-LLM. The repository also contains a standalone LLM risk-analysis Agent,
-artifact writer, and service. Those components use an injected `LLMClient` but
-are not called by the CLI or another product entry point.
+The normal review path is deterministic. Optional CLI LLM analysis and the
+`agent-review` graph can use an explicitly configured `LLMClient`; no-key mode
+uses deterministic risk/fix output. Four role Agents are distinct graph nodes
+with independent input/output contracts and explicit shared state.
 
 Current responsibilities:
 
@@ -448,6 +458,7 @@ Important files:
 
 ```text
 src/releaseguard_agent/observability/trace_writer.py
+src/releaseguard_agent/observability/execution_trace.py
 src/releaseguard_agent/observability/__init__.py
 ```
 
@@ -474,6 +485,24 @@ The trace payload records:
 When report, checklist, Agent advice, and trace outputs are requested
 together, `trace.json` references all generated artifact paths.
 
+Agent and verification runs additionally expose `execution_trace.json`, whose
+redacted event spans cover nodes, tools, retrieval candidates, Evidence IDs,
+LLM provider/model, available token use, latency, routes, artifacts, errors,
+and before/after deltas. The workflow service constructs a fresh tracer for
+each run.
+
+## Delivery layer
+
+The root `Dockerfile` runs the synchronous API as a non-root user and includes
+only runtime source, rule knowledge, eval data, and sample projects. Its health
+check calls `GET /health`. `.dockerignore` excludes secrets, local environment,
+Git metadata, tests, caches, outputs, and local collaboration memory.
+
+`.github/workflows/ci.yml` defines Ubuntu jobs for dependency installation,
+Ruff, mypy, unit/integration/E2E tests, the offline Eval, Docker build, and API
+health smoke. It has read-only repository permissions and does not publish an
+image or use credentials.
+
 ## Public API surfaces
 
 The project currently exposes several package-level public API surfaces:
@@ -484,6 +513,8 @@ releaseguard_agent.llm
 releaseguard_agent.rag
 releaseguard_agent.reports
 releaseguard_agent.observability
+releaseguard_agent.services
+releaseguard_agent.evaluation
 ```
 
 These public exports make future CLI/API/docs integrations safer because
@@ -491,25 +522,25 @@ external callers do not need to depend on concrete internal module paths.
 
 ## Deterministic design boundaries
 
-The current implementation intentionally keeps these behaviors deterministic:
+The implementation keeps these authoritative behaviors deterministic:
 
 - checker execution
-- rule evidence lookup
 - release decision synthesis
 - release decision explanation
 - report writing
 - checklist writing
-- trace writing
+- trace redaction and writing
 
-The current product entry points intentionally avoid:
+The product entry points intentionally avoid:
 
-- automatic live LLM calls
-- embeddings
-- vector databases
+- implicit live LLM or embedding calls
+- LLM changes to Checker facts or blocking policy
 - network retrieval
-- hidden release-blocking policy changes
+- automatic modification of reviewed repositories
 
-This keeps unit tests and integration tests stable.
+Exact/BM25 retrieval and no-key Agent runs remain offline. Vector retrieval and
+LLM analysis require explicit provider configuration; their unavailability has
+tested deterministic fallback behavior.
 
 ## Reserved future extension points
 
@@ -574,10 +605,10 @@ Implemented package:
 src/releaseguard_agent/services/
 ```
 
-`ReleaseReviewService` is the current business boundary. It validates one
+`ReleaseReviewService` is the shared business boundary. It validates one
 project path, executes one checker pass, aggregates deterministic results, and
-coordinates report, checklist, advice, and trace artifacts. M2 can reuse this
-service from FastAPI without copying CLI business logic.
+coordinates report, checklist, advice, and trace artifacts. CLI and FastAPI
+both reuse it without copying Checker business logic.
 
 ## Test strategy
 
@@ -586,6 +617,8 @@ The current test suite includes:
 ```text
 tests/unit/
 tests/integration/
+tests/e2e/
+evals/datasets/
 ```
 
 Unit tests cover:
@@ -601,6 +634,9 @@ Unit tests cover:
 - RAG and rule evidence
 - deterministic Agent decision/advice behavior
 - CLI behavior
+- Agent tools, conditional graph routes, role contracts, and verification
+- execution trace redaction and event coverage
+- delivery configuration and health-smoke behavior
 
 Integration tests cover:
 
@@ -612,27 +648,38 @@ Integration tests cover:
 - trace artifacts
 - exit-code behavior
 
+E2E tests start a real loopback Uvicorn process and call `/health`. The offline
+golden eval executes real retrieval/review/graph/parser/verification components
+with FakeLLM and a fixed embedding, and explicitly limits quality claims.
+
 ## Current architecture summary
 
 ReleaseGuard Agent currently follows this architecture:
 
 ```text
-CLI or FastAPI `/reviews`
+CLI or FastAPI
  -> ReleaseReviewService
  -> default checker runner
  -> deterministic checkers
  -> CheckResult records
- -> report/checklist artifacts
- -> deterministic RAG evidence enrichment
- -> deterministic Agent release decision advice
- -> observability trace artifact
+ -> traceable exact rule evidence
+ -> deterministic release policy
+ -> reports/checklist/advice/trace
+
+CLI `agent-review` or verification
+ -> Agent tools
+ -> compiled conditional StateGraph
+ -> Evidence / Risk / Fix Planner / Verifier role nodes
+ -> exact/BM25/LlamaIndex vector/hybrid retrieval
+ -> optional evidence-citing LLM or deterministic fallback
+ -> deterministic final policy
+ -> redacted execution trace
 ```
 
 This gives the project a working phase-one release-review pipeline while
-keeping the architecture open for future API, plugin, persistence, and richer
-RAG/LLM capabilities.
+keeping plugin expansion and persistence as explicit future boundaries.
 
 A provider-neutral LLM boundary, fake client, risk-analysis Agent, provider
-factory, and OpenAI-compatible adapter are reachable through the explicit CLI
-LLM-output flag. Without that flag and complete configuration, the product
-remains deterministic and offline.
+factory, and OpenAI-compatible adapter are reachable through explicit CLI/graph
+options. Without those options and complete configuration, the product remains
+deterministic and offline.

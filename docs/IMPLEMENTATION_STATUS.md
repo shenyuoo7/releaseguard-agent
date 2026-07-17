@@ -1,6 +1,6 @@
 # ReleaseGuard Agent Implementation Status
 
-Last verified: 2026-07-17 (M7)
+Last verified: 2026-07-17 (M8)
 
 This page is the evidence-backed status of the local repository. A directory,
 class name, roadmap item, or resume keyword is not treated as implemented
@@ -48,7 +48,7 @@ still insufficient, and route LLM failures through a deterministic fallback.
 | Unified review service | COMPLETE | `ReleaseReviewService.review()` validates the target, runs one checker pass, aggregates results, and coordinates all current artifact writers. The CLI calls this service. |
 | Python release checks | COMPLETE | Dependency, environment example, test structure, pytest configuration, and optional pytest execution checks are registered. |
 | FastAPI and Flask project checks | PARTIAL | Static dependency and AST-based framework signals are checked; this is not a ReleaseGuard FastAPI service. |
-| Docker review | PARTIAL | Dockerfile and Compose intent are inspected statically; ReleaseGuard itself is not containerized. |
+| Docker review | COMPLETE | Target Dockerfile and Compose intent are inspected statically; ReleaseGuard also has a non-root local demo API image. The image is not an untrusted-code sandbox. |
 | Structured reports and checklist | COMPLETE | The CLI can write Markdown and JSON reports, a release checklist, and deterministic advice. |
 | Rule evidence retrieval | COMPLETE | Structured rule chunks support exact rule ID, BM25 Top-K, real LlamaIndex vector indexing, hybrid reciprocal-rank fusion, chunk deduplication, and deterministic token-overlap reranking. Every returned evidence record carries rule/source/chunk and score provenance. |
 | Embedding provider | PARTIAL | Product code can build a configurable OpenAI-compatible embedding provider, and unavailable configuration falls back to BM25. Offline fake embeddings verify mechanics, not real semantic retrieval quality; real provider interoperability remains opt-in and unverified. |
@@ -57,13 +57,13 @@ still insufficient, and route LLM failures through a deterministic fallback.
 | Optional LLM risk analysis | COMPLETE | CLI can enrich an existing deterministic review through `LLMReviewService`; FakeLLM covers the product path offline and deterministic facts remain authoritative. |
 | OpenAI-compatible adapter | COMPLETE | Explicit provider/model/base URL/timeout environment configuration builds the lazy SDK adapter; missing key falls back to deterministic mode and errors are sanitized. Real network interoperability is optional and not asserted by offline tests. |
 | Trace | COMPLETE | Existing run traces remain available; Agent and verification flows additionally record redacted node/tool/retrieval/LLM events, route history, provenance IDs, latency, optional token usage, artifacts, errors, and before/after deltas. |
-| Unit and integration tests | COMPLETE | 312 unit tests and 21 CLI/API integration tests pass at M7. |
+| Unit and integration tests | COMPLETE | 315 unit tests and 21 CLI/API integration tests pass at M8. |
 | E2E and eval system | COMPLETE | A real Uvicorn health smoke test and a fixed offline golden-case eval cover six required metrics. FakeLLM/fixed embeddings prove repeatability and wiring, not provider or semantic quality. |
 | FastAPI product API | COMPLETE | `GET /health`, `POST /reviews`, and `POST /verifications` are real synchronous routes with strict schemas, safe path policy, uniform errors, TestClient integration, and Uvicorn health smoke coverage. |
 | Agent tools and LangGraph | COMPLETE | Reachable tool wrappers are called by a typed `StateGraph`; the graph has normal and conditional edges, is compiled, invoked by a service and CLI, and has four distinct tested routes. |
 | Role-based multi-agent workflow | COMPLETE | Evidence, Risk, Fix Planner, and Verifier have independent input/output dataclasses, execute as distinct graph nodes, and transfer typed state. One LLM instance may be shared, but deterministic policy resolves conflicts. |
 | User-applied-fix verification | COMPLETE | CLI/API call `ReleaseVerificationService`, scan separate before/after snapshots, run the Verifier Agent, report resolved/new/unchanged, and use the after scan for the final decision. No repository is modified. |
-| Docker packaging and GitHub Actions | MISSING | No product Dockerfile or `.github/workflows` CI exists. |
+| Docker packaging and GitHub Actions | PARTIAL | The non-root demo Dockerfile, health smoke script, and Ubuntu Actions workflow are implemented and statically tested. The local Docker daemon was unavailable and no remote workflow was triggered, so runtime status remains unverified. |
 
 ## Current main flow
 
@@ -220,6 +220,21 @@ M7 verification:
 | Ruff | Passed |
 | Mypy | 79 source files, no issues |
 
+M8 verification:
+
+| Suite/check | Result |
+| --- | --- |
+| Docker/CI/smoke focused selection | 3 passed |
+| `tests/unit` | 315 passed |
+| `tests/integration` | 21 passed |
+| `tests/e2e` | 1 passed |
+| Full suite | 337 passed |
+| Offline golden eval | Six required metrics = 1.0 on fixed cases |
+| Ruff | Passed |
+| Mypy | 79 source files, no issues |
+| Docker build/health | Attempted; Docker Desktop Linux daemon unavailable, so build and health were not executed |
+| Remote GitHub Actions | Not run: no push was authorized |
+
 ## Known risks
 
 - The declared OpenAI SDK is installed in the project `.venv`, but installing
@@ -237,13 +252,20 @@ M7 verification:
 - `TestStructureChecker` ignores any absolute path containing an `outputs`
   component. Test target projects placed below the repository's `outputs/`
   tree can therefore produce false missing-test findings.
+- Reviewing this repository root as one target sees framework imports inside
+  bundled `sample_projects/`; the Flask detector then reports a false missing
+  root dependency. Review individual sample/project roots instead. Project
+  boundary detection for monorepos remains future work.
 - Fake embedding tests establish deterministic integration behavior, not the
   semantic quality or availability of a real embedding endpoint.
 - The current reranker is transparent deterministic token overlap rather than
   a learned cross-encoder.
 - The golden eval is intentionally small. A perfect score on its fixed cases
   does not establish broad retrieval, LLM, or production embedding quality.
-- There is no coverage percentage, Linux CI result, or container smoke test.
+- There is no coverage percentage or remote Linux CI result.
+- Docker configuration and smoke commands are tested statically, but the local
+  Docker Desktop Linux daemon was unavailable. Image build and container health
+  remain unverified on this workstation.
 
 ## Approved M0-M8 route
 
@@ -257,7 +279,7 @@ M7 verification:
 | M5 | Agent tools and LangGraph conditional workflow | Complete and verified locally |
 | M6 | Role-based Agents and user-applied-fix verification | Complete and verified locally |
 | M7 | Execution-level trace and minimum evals | Complete and verified locally |
-| M8 | Docker, GitHub Actions, documentation, and interview training | Not started |
+| M8 | Docker, GitHub Actions, documentation, and interview training | Implementation complete; local Docker and remote Actions execution unverified |
 
 Every milestone is independently implemented, verified, reviewed, documented,
 and saved as a local checkpoint. The approved completion run continues to the
@@ -269,20 +291,20 @@ next milestone automatically and never pushes to a remote.
 | --- | --- | --- |
 | Python release review | COMPLETE | Deterministic Python release-readiness CLI and tests. |
 | FastAPI and Flask support | PARTIAL | Static project detection and selected release checks. |
-| Docker | PARTIAL | Dockerfile and Compose static inspection only. |
+| Docker | PARTIAL | Target-project inspection and a non-root ReleaseGuard demo image are implemented; local image build is still unverified because the daemon was unavailable. |
 | Pytest | COMPLETE | Test structure/configuration checks, optional execution, and project test suite. |
 | Checker framework | COMPLETE | Registered checker execution with structured results and error isolation. |
 | Rule knowledge base | COMPLETE | The current release-rule scope has structured rule metadata, local trusted-source documents, and provenance-preserving chunks. |
 | RAG | COMPLETE | Exact/BM25/LlamaIndex vector/hybrid retrieval with provenance, graceful fallback, and deterministic reranking; real semantic quality remains unbenchmarked. |
 | LLM API | COMPLETE | Configurable optional CLI path and safe no-key deterministic fallback are code/test backed; real provider calls remain opt-in and environment-dependent. |
-| Agent decision | PARTIAL | Deterministic advice is product-wired; standalone single-LLM analysis is not. |
+| Agent decision | COMPLETE | Deterministic policy is product-wired and authoritative; optional evidence-citing LLM analysis is reachable through CLI/graph paths. |
 | Structured reports | COMPLETE | Report, checklist, deterministic advice, and run trace artifacts. |
 | FastAPI API | COMPLETE | Health, review, and before/after verification are synchronous, reachable, path-checked, and covered by TestClient; health also has a real Uvicorn smoke test. |
 | BM25/vector/rerank/LlamaIndex | COMPLETE | Reachable exact/BM25/vector/hybrid service and CLI; LlamaIndex owns vector indexing, candidates are fused/deduplicated, and a deterministic reranker produces final scores. |
 | Agent tools/LangGraph | COMPLETE | Real tool invocations and a compiled `StateGraph` with normal/conditional edges and tested clean, blocking, evidence-gap, and LLM-fallback routes. |
 | Multi-agent workflow | COMPLETE | Four role Agents have separate contracts and graph nodes; state and Evidence IDs are explicit, and deterministic policy wins conflicts. |
 | Complete repair loop | COMPLETE | Scan, evidence, decision, fix plan, user manual edit, rescan, Verifier before/after delta, and final deterministic decision are reachable; no automatic edits. |
-| Linux/GitHub Actions | MISSING | Planned for M8. |
+| Linux/GitHub Actions | PARTIAL | Ubuntu workflow contains quality, unit/integration/E2E, Eval, Docker build, and health smoke jobs; YAML/commands are tested locally, but no remote run was triggered. |
 
 Until a later milestone changes this page with code and test evidence, missing
 or partial capabilities must not be described as complete.

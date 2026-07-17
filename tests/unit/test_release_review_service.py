@@ -59,6 +59,11 @@ def test_review_runs_checker_once_and_reuses_results_for_all_artifacts(
     assert result.summary["blocking"] == 0
     assert result.advice_result is not None
     assert result.advice_result.check_results == result.check_results
+    assert result.retrieval_evidence
+    evidence = result.retrieval_evidence[0]
+    assert evidence.rule_id == "RG-DEPS-001"
+    assert evidence.chunk_id.startswith("RG-DEPS-001:chunk-")
+    assert evidence.retrieval_method == "exact"
     assert result.artifacts.report is not None
     assert result.artifacts.checklist is not None
     assert result.artifacts.advice is not None
@@ -132,3 +137,4 @@ def test_review_result_payload_is_the_cli_report_contract(
     assert payload["include_pytest_execution"] is False
     assert payload["summary"]["blocking"] == 0
     assert payload["results"][0]["checker_name"] == "fake_checker"
+    assert payload["retrieval_evidence"][0]["rule_id"] == "RG-DEPS-001"

@@ -130,6 +130,16 @@ List default checkers:
 .venv\Scripts\python.exe -m releaseguard_agent.cli.main list-checkers
 ```
 
+Search trusted release rules offline with BM25:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main search-rules "Docker health check" --mode bm25 --top-k 5
+```
+
+`--mode vector` and `--mode hybrid` use the configured embedding provider. If
+none is configured, the command returns `mode_used: bm25` with an explicit
+`embedding_unavailable` degradation reason instead of contacting a provider.
+
 ## Exit codes
 
 | Exit code | Meaning |
@@ -183,8 +193,12 @@ The CLI and `POST /reviews` delegate scanning to the shared
 route remains explicitly unavailable until M6 supplies real before/after
 semantics.
 
-The current rule lookup is exact and local; it is not BM25, vector retrieval,
-or hybrid RAG. Production LLM wiring, LangGraph, role-based multi-agent
-orchestration, post-fix verification semantics, Docker packaging, and GitHub
-Actions remain planned work. See the implementation status page for the
-evidence-backed boundary.
+Rule lookup now supports exact rule ID, BM25 Top-K, LlamaIndex in-memory vector
+retrieval, and hybrid fusion with deduplication and deterministic reranking.
+Vector and hybrid modes require an explicitly configured embedding provider;
+without one they report the degradation and fall back to offline BM25. This is
+retrieval infrastructure, not a claim that semantic quality has been validated
+against a real embedding model. LangGraph, role-based multi-agent orchestration,
+post-fix verification semantics, Docker packaging, and GitHub Actions remain
+planned work. See the implementation status page for the evidence-backed
+boundary.

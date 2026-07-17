@@ -67,6 +67,22 @@ def test_review_uses_shared_service_and_returns_structured_results(
     assert payload["summary"]["total"] > 0
     assert payload["artifacts"] == {}
     assert all("should_block_release" in item for item in payload["results"])
+    assert payload["retrieval_evidence"]
+    assert all(
+        {
+            "evidence_id",
+            "rule_id",
+            "source_url",
+            "local_source",
+            "chunk_id",
+            "retrieval_method",
+            "raw_score",
+            "fusion_score",
+            "rerank_score",
+        }
+        <= item.keys()
+        for item in payload["retrieval_evidence"]
+    )
 
 
 def test_review_rejects_path_outside_allowed_roots(tmp_path: Path) -> None:

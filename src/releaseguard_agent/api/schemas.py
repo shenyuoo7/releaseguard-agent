@@ -55,6 +55,7 @@ class ReviewResponse(ApiModel):
     summary: ReviewSummary
     results: list[CheckResultResponse]
     artifacts: dict[str, str]
+    retrieval_evidence: list[dict[str, Any]]
 
 
 class VerificationRequest(ApiModel):

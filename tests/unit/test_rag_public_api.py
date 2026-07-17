@@ -9,11 +9,21 @@ from releaseguard_agent.rag import (
 
 
 EXPECTED_PUBLIC_API = {
+    "BM25RuleRetriever",
     "CheckResultEnricher",
     "EnrichedCheckResult",
+    "ExactRuleRetriever",
+    "HybridRuleRetriever",
+    "LlamaIndexVectorRetriever",
+    "RetrievalResult",
+    "RuleChunk",
+    "RuleCorpusLoader",
     "RuleIndexFormatError",
     "RuleIndexRetriever",
     "RuleNotFoundError",
+    "RuleRetrievalService",
+    "build_embedding_model",
+    "get_default_rule_index_path",
 }
 
 

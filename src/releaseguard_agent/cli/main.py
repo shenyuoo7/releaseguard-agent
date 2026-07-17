@@ -9,6 +9,11 @@ from releaseguard_agent.core.default_checkers import (
     get_default_python_checker_names,
 )
 from releaseguard_agent.models.check_result import CheckResult
+from releaseguard_agent.rag import (
+    RuleRetrievalService,
+    build_embedding_model,
+    get_default_rule_index_path,
+)
 from releaseguard_agent.llm import (
     LLMProviderConfigurationError,
     build_llm_runtime,
@@ -101,6 +106,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     list_parser.set_defaults(handler=run_list_checkers_command)
 
+    search_parser = subparsers.add_parser(
+        "search-rules",
+        help="Search trusted release-rule evidence.",
+    )
+    search_parser.add_argument("query")
+    search_parser.add_argument(
+        "--mode",
+        choices=("exact", "bm25", "vector", "hybrid"),
+        default="hybrid",
+    )
+    search_parser.add_argument("--top-k", type=int, default=5)
+    search_parser.set_defaults(handler=run_search_rules_command)
+
     return parser
 
 
@@ -169,6 +187,24 @@ def run_list_checkers_command(args: argparse.Namespace) -> int:
     for name in names:
         print(name)
 
+    return EXIT_SUCCESS
+
+
+def run_search_rules_command(args: argparse.Namespace) -> int:
+    try:
+        embed_model = (
+            build_embedding_model(os.environ)
+            if args.mode in {"vector", "hybrid"}
+            else None
+        )
+        result = RuleRetrievalService(
+            get_default_rule_index_path(),
+            embed_model=embed_model,
+        ).retrieve(args.query, mode=args.mode, top_k=args.top_k)
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        _print_error(str(exc))
+        return EXIT_USAGE_ERROR
+    print(json.dumps(result.to_dict(), indent=2))
     return EXIT_SUCCESS
 
 

@@ -18,6 +18,7 @@ from releaseguard_agent.agents import (
 from releaseguard_agent.core.checker_runner import CheckerRunner
 from releaseguard_agent.core.default_checkers import build_default_python_runner
 from releaseguard_agent.models.check_result import CheckResult, CheckStatus, RiskLevel
+from releaseguard_agent.models.retrieval_evidence import RetrievalEvidence
 from releaseguard_agent.observability import (
     TraceArtifacts,
     build_trace_payload,
@@ -31,6 +32,7 @@ from releaseguard_agent.reports import (
     write_release_checklist_artifact,
     write_report_artifacts,
 )
+from releaseguard_agent.rag import RuleRetrievalService
 
 
 RunnerFactory = Callable[..., CheckerRunner]
@@ -101,6 +103,7 @@ class ReleaseReviewResult:
     summary: dict[str, object]
     report_payload: dict[str, Any]
     advice_result: ReleaseDecisionAdviceResult | None
+    retrieval_evidence: tuple[RetrievalEvidence, ...]
     artifacts: ReleaseReviewArtifacts
 
     @property
@@ -152,12 +155,16 @@ class ReleaseReviewService:
         )
         check_results = tuple(runner.run(normalized_project_path))
         summary = build_result_summary(check_results)
+        retrieval_evidence = self._retrieve_exact_evidence(check_results)
         report_payload = build_report_payload(
             project_path=normalized_project_path,
             include_pytest_execution=include_pytest_execution,
             results=list(check_results),
             summary=summary,
         )
+        report_payload["retrieval_evidence"] = [
+            item.to_dict() for item in retrieval_evidence
+        ]
 
         report_artifacts = self._write_report(
             output_dir=report_output_dir,
@@ -191,6 +198,7 @@ class ReleaseReviewService:
             advice_result=advice_result,
             artifacts=artifacts,
         )
+
         artifacts = ReleaseReviewArtifacts(
             report=report_artifacts,
             checklist=checklist_artifacts,
@@ -205,8 +213,23 @@ class ReleaseReviewService:
             summary=summary,
             report_payload=report_payload,
             advice_result=advice_result,
+            retrieval_evidence=retrieval_evidence,
             artifacts=artifacts,
         )
+
+    def _retrieve_exact_evidence(
+        self,
+        check_results: tuple[CheckResult, ...],
+    ) -> tuple[RetrievalEvidence, ...]:
+        service = RuleRetrievalService(self._rule_index_path)
+        evidence: dict[str, RetrievalEvidence] = {}
+        for result in check_results:
+            if not result.rule_id:
+                continue
+            retrieved = service.retrieve(result.rule_id, mode="exact", top_k=10)
+            for item in retrieved.evidence:
+                evidence.setdefault(item.evidence_id, item)
+        return tuple(evidence.values())
 
     def _write_report(
         self,

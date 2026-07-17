@@ -1,6 +1,6 @@
 # ReleaseGuard Agent Implementation Status
 
-Last verified: 2026-07-17 (M3)
+Last verified: 2026-07-17 (M4)
 
 This page is the evidence-backed status of the local repository. A directory,
 class name, roadmap item, or resume keyword is not treated as implemented
@@ -21,6 +21,13 @@ runs deterministic checkers once, builds `CheckResult` records, applies the
 deterministic blocking policy, and can write reports, a release checklist,
 deterministic release advice, and a run-level trace from the same scan.
 
+Every review now attaches exact rule evidence to its structured result. The
+CLI also exposes `search-rules` with exact, BM25, vector, and hybrid modes.
+Vector retrieval uses a real LlamaIndex `VectorStoreIndex`; offline tests use a
+fixed fake embedding, while product configuration can build an OpenAI-compatible
+embedding provider. Missing embedding configuration degrades explicitly to
+BM25 without a network request.
+
 The repository also contains a provider-neutral LLM protocol,
 `FakeLLMClient`, `ReleaseRiskAnalysisAgent`, an OpenAI-compatible provider
 factory, and optional CLI LLM analysis. A normal CLI/API run does not resolve
@@ -37,7 +44,8 @@ the explicit `--llm-analysis-output-dir` path can invoke a configured client.
 | FastAPI and Flask project checks | PARTIAL | Static dependency and AST-based framework signals are checked; this is not a ReleaseGuard FastAPI service. |
 | Docker review | PARTIAL | Dockerfile and Compose intent are inspected statically; ReleaseGuard itself is not containerized. |
 | Structured reports and checklist | COMPLETE | The CLI can write Markdown and JSON reports, a release checklist, and deterministic advice. |
-| Rule evidence retrieval | PARTIAL | Exact local `rule_id` retrieval with source provenance exists. Natural-language retrieval, BM25, vectors, fusion, and reranking do not. |
+| Rule evidence retrieval | COMPLETE | Structured rule chunks support exact rule ID, BM25 Top-K, real LlamaIndex vector indexing, hybrid reciprocal-rank fusion, chunk deduplication, and deterministic token-overlap reranking. Every returned evidence record carries rule/source/chunk and score provenance. |
+| Embedding provider | PARTIAL | Product code can build a configurable OpenAI-compatible embedding provider, and unavailable configuration falls back to BM25. Offline fake embeddings verify mechanics, not real semantic retrieval quality; real provider interoperability remains opt-in and unverified. |
 | Deterministic release decision | COMPLETE | `CheckResult.should_block_release` remains authoritative and is reused by deterministic decision code. |
 | LLM abstraction and FakeLLM | COMPLETE | Provider-neutral messages/responses/client protocol and deterministic fake client have unit tests. |
 | Optional LLM risk analysis | COMPLETE | CLI can enrich an existing deterministic review through `LLMReviewService`; FakeLLM covers the product path offline and deterministic facts remain authoritative. |
@@ -59,13 +67,14 @@ CLI or POST /reviews
 -> default checker composition
 -> CheckerRunner
 -> deterministic CheckResult records
+-> exact rule evidence attached to the review result
 -> deterministic release policy
 -> optional report/checklist/advice/trace writers
 -> optional configured LLMReviewService analysis (CLI flag only)
 ```
 
-Exact rule evidence is used by the deterministic advice path. The standalone
-LLM risk-analysis service is outside this flow.
+The standalone `search-rules` CLI reaches exact/BM25/vector/hybrid retrieval.
+The LLM risk-analysis service is still outside the default review flow.
 
 ## Test baseline
 
@@ -144,6 +153,18 @@ M3 verification:
 | Ruff | Passed |
 | Mypy | 63 source files, no issues |
 
+M4 verification:
+
+| Suite/check | Result |
+| --- | --- |
+| RAG/service/API focused selection | 38 passed |
+| `tests/unit` | 293 passed |
+| `tests/integration` | 21 passed |
+| `tests/e2e` | 1 passed |
+| Full suite | 315 passed |
+| Ruff | Passed |
+| Mypy | 69 source files, no issues |
+
 ## Known risks
 
 - The declared OpenAI SDK is installed in the project `.venv`, but installing
@@ -161,7 +182,11 @@ M3 verification:
 - `TestStructureChecker` ignores any absolute path containing an `outputs`
   component. Test target projects placed below the repository's `outputs/`
   tree can therefore produce false missing-test findings.
-- There is no coverage percentage, E2E suite, retrieval benchmark, Agent eval,
+- Fake embedding tests establish deterministic integration behavior, not the
+  semantic quality or availability of a real embedding endpoint.
+- The current reranker is transparent deterministic token overlap rather than
+  a learned cross-encoder.
+- There is no coverage percentage, retrieval benchmark, Agent eval,
   Linux CI result, or container smoke test.
 
 ## Approved M0-M8 route
@@ -172,7 +197,7 @@ M3 verification:
 | M1 | Unified `ReleaseReviewService` | Complete and verified locally |
 | M2 | FastAPI and shared CLI/API use | Complete and verified locally; verification semantics deferred to M6 |
 | M3 | Production OpenAI-compatible provider configuration | Complete and offline verified |
-| M4 | BM25, vector retrieval, fusion, and reranking | Not started |
+| M4 | BM25, vector retrieval, fusion, and reranking | Complete and verified locally |
 | M5 | Agent tools and LangGraph conditional workflow | Not started |
 | M6 | Role-based Agents and user-applied-fix verification | Not started |
 | M7 | Execution-level trace and minimum evals | Not started |
@@ -191,13 +216,13 @@ next milestone automatically and never pushes to a remote.
 | Docker | PARTIAL | Dockerfile and Compose static inspection only. |
 | Pytest | COMPLETE | Test structure/configuration checks, optional execution, and project test suite. |
 | Checker framework | COMPLETE | Registered checker execution with structured results and error isolation. |
-| Rule knowledge base | PARTIAL | Local rule index, trusted sources, and exact evidence lookup. |
-| RAG | PARTIAL | Exact rule evidence retrieval only; not semantic or hybrid RAG. |
+| Rule knowledge base | COMPLETE | The current release-rule scope has structured rule metadata, local trusted-source documents, and provenance-preserving chunks. |
+| RAG | COMPLETE | Exact/BM25/LlamaIndex vector/hybrid retrieval with provenance, graceful fallback, and deterministic reranking; real semantic quality remains unbenchmarked. |
 | LLM API | COMPLETE | Configurable optional CLI path and safe no-key deterministic fallback are code/test backed; real provider calls remain opt-in and environment-dependent. |
 | Agent decision | PARTIAL | Deterministic advice is product-wired; standalone single-LLM analysis is not. |
 | Structured reports | COMPLETE | Report, checklist, deterministic advice, and run trace artifacts. |
 | FastAPI API | PARTIAL | Health and review are reachable and tested through TestClient and Uvicorn; verification is explicitly unavailable until M6. |
-| BM25/vector/rerank/LlamaIndex | MISSING | Planned for M4. |
+| BM25/vector/rerank/LlamaIndex | COMPLETE | Reachable exact/BM25/vector/hybrid service and CLI; LlamaIndex owns vector indexing, candidates are fused/deduplicated, and a deterministic reranker produces final scores. |
 | Agent tools/LangGraph | MISSING | Planned for M5. |
 | Multi-agent workflow | MISSING | Planned role nodes: Evidence, Risk, Fix Planner, and Verifier. |
 | Complete repair loop | MISSING | Planned manual-edit rescan and before/after comparison; no automatic edits. |

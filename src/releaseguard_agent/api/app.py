@@ -129,6 +129,9 @@ def _review_response(result: ReleaseReviewResult) -> ReviewResponse:
         summary=summary,
         results=checks,
         artifacts=result.artifacts.output_paths(),
+        retrieval_evidence=[
+            item.to_dict() for item in result.retrieval_evidence
+        ],
     )
 
 

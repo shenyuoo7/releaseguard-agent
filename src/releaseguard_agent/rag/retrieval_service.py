@@ -201,8 +201,11 @@ class RuleRetrievalService:
             return fallback(fallback_reason)
         if snapshot.manifest.source_index_sha256 != self._source_index_sha256:
             return fallback("relation_source_index_mismatch")
+        graph_candidate_cap = (
+            _GRAPH_CANDIDATE_CAP if normalized_mode == "graph_hybrid" else top_k
+        )
         graph_evidence, reason = self._expand_snapshot(
-            snapshot, seeds, budget, top_k
+            snapshot, seeds, budget, graph_candidate_cap
         )
         if reason is not None:
             return fallback(reason)
@@ -217,7 +220,7 @@ class RuleRetrievalService:
         text_result = self._retrieve_text(
             query,
             requested_mode="hybrid",
-            top_k=min(_GRAPH_CANDIDATE_CAP, max(top_k * 2, top_k)),
+            top_k=_GRAPH_CANDIDATE_CAP,
         )
         return RetrievalResult(
             query,

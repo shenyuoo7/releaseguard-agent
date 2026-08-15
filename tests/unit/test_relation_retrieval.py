@@ -149,6 +149,57 @@ def _build_large_service(
     )
 
 
+def _build_multi_source_service(
+    root: Path, *, source_count: int
+) -> tuple[RuleRetrievalService, str]:
+    corpus_root = root / "multi-source-corpus"
+    corpus_root.mkdir()
+    index_path = corpus_root / "rule_index.md"
+    index_path.write_text(
+        "\n".join(
+            (
+                HEADER,
+                SEPARATOR,
+                "| RG-POOL-001 | Pool rule | PoolChecker | pool source | "
+                "source-backed | high | block | pool_exists | pool-phase |",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    source_directory = corpus_root / "sources"
+    source_directory.mkdir()
+    for number in range(1, source_count + 1):
+        boundary = "Signal " * 100 if number == 6 else "Other pool boundary."
+        (source_directory / f"source-{number:02d}.md").write_text(
+            "\n".join(
+                (
+                    f"# Pool Source {number:02d}",
+                    "",
+                    "## Source",
+                    "",
+                    f"- URL: https://example.com/pool-{number:02d}",
+                    "- Type: documentation",
+                    "",
+                    "## ReleaseGuard Rule Mapping",
+                    "",
+                    SOURCE_HEADER,
+                    SOURCE_SEPARATOR,
+                    "| RG-POOL-001 | Pool candidate | source-backed | block | "
+                    f"pool_exists | {boundary}|",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+    snapshot_root = root / "multi-source-snapshots"
+    snapshot = RelationIndexBuilder().build(index_path, snapshot_root)
+    return (
+        RuleRetrievalService(index_path, relation_snapshot_root=snapshot_root),
+        snapshot.manifest.index_version,
+    )
+
+
 def test_fixed_task1_snapshot_fixture_is_usable_for_relation_retrieval() -> None:
     """Would fail if a checked-in immutable Task 1 snapshot became incompatible."""
     with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as temporary_directory:
@@ -246,6 +297,41 @@ def test_graph_hybrid_pins_rrf_order_channel_cap_and_final_cap() -> None:
         "RG-CAP-003:chunk-01",
         "RG-CAP-004:chunk-01",
     ]
+
+
+def test_graph_hybrid_collects_fixed_channel_pools_before_final_truncation() -> None:
+    """Would fail if caller top_k limited either channel before RRF fusion."""
+    with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as temporary_directory:
+        service, version = _build_multi_source_service(
+            Path(temporary_directory), source_count=25
+        )
+        arguments = {
+            "mode": "graph_hybrid",
+            "seed_rule_ids": ("RG-POOL-001",),
+            "relation_index_version": version,
+            "relation_budget": _budget(max_nodes=100, max_edges=100),
+        }
+        full = service.retrieve("signal", top_k=25, **arguments)
+        final = service.retrieve("signal", top_k=5, **arguments)
+
+    assert len(full.evidence) == 20
+    assert {item.metadata["text_rank"] for item in full.evidence} == {
+        str(rank) for rank in range(1, 21)
+    }
+    assert {item.metadata["graph_rank"] for item in full.evidence} == {
+        str(rank) for rank in range(1, 21)
+    }
+    assert [item.chunk_id for item in final.evidence] == [
+        "RG-POOL-001:chunk-01",
+        "RG-POOL-001:chunk-02",
+        "RG-POOL-001:chunk-06",
+        "RG-POOL-001:chunk-03",
+        "RG-POOL-001:chunk-04",
+    ]
+    signal_item = final.evidence[2]
+    assert signal_item.fusion_score == pytest.approx(1 / 61 + 1 / 66)
+    assert signal_item.rerank_score == pytest.approx(1 / 61 + 1 / 66)
+    assert final.evidence == full.evidence[:5]
 
 
 def test_local_graph_returns_only_verified_chunk_paths_with_provenance() -> None:

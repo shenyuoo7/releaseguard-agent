@@ -406,6 +406,13 @@ def _validate_snapshot(
         )
         if snapshot.tombstone_ids != expected_tombstone_ids:
             raise ProjectMemoryIntegrityError("memory tombstone chain is invalid")
+        superseded_ids = tuple(
+            item.supersedes for item in records if item.supersedes is not None
+        )
+        if len(superseded_ids) != len(set(superseded_ids)):
+            raise ProjectMemoryIntegrityError(
+                "memory supersedes relation must be one-to-one"
+            )
         if any(
             item.supersedes is not None
             and (

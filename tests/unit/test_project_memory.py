@@ -212,6 +212,25 @@ def test_child_source_allows_explicit_superseded_transition_with_replacement(
     }
 
 
+def test_child_source_rejects_multiple_replacements_for_one_parent(
+    tmp_path: Path,
+) -> None:
+    """A parent memory has one auditable successor in each child version."""
+
+    store = ProjectMemoryStore(runtime_root(tmp_path))
+    parent = store.publish("project-alpha", (record("memory-1"),))
+
+    with pytest.raises(ProjectMemoryIntegrityError, match="one-to-one"):
+        store.publish(
+            "project-alpha",
+            (
+                record("memory-2", supersedes="memory-1"),
+                record("memory-3", supersedes="memory-1"),
+            ),
+            parent_memory_version=parent.manifest.memory_version,
+        )
+
+
 def test_cache_rebuilds_from_verified_source_and_cannot_change_records(
     tmp_path: Path,
 ) -> None:
@@ -382,6 +401,35 @@ def test_store_rejects_recursive_raw_conversation_payloads_before_artifacts(
     conversation_payload: str,
 ) -> None:
     """Transcript structures cannot be smuggled through JSON-shaped memory content."""
+
+    root = runtime_root(tmp_path)
+    with pytest.raises(ValueError, match="conversation"):
+        ProjectMemoryStore(root).publish(
+            "project-alpha", (record(content=conversation_payload),)
+        )
+
+    assert not list(root.glob("pm-*"))
+    assert not (root / "cache").exists()
+
+
+@pytest.mark.parametrize(
+    "conversation_payload",
+    (
+        json.dumps(json.dumps([{"role": "user", "content": "release"}])),
+        json.dumps(
+            {
+                "context": json.dumps(
+                    [{"role": "assistant", "content": "reply"}]
+                )
+            }
+        ),
+    ),
+)
+def test_store_rejects_nested_json_string_transcripts_before_artifacts(
+    tmp_path: Path,
+    conversation_payload: str,
+) -> None:
+    """Encoded transcript strings are decoded and rejected before persistence."""
 
     root = runtime_root(tmp_path)
     with pytest.raises(ValueError, match="conversation"):

@@ -29,6 +29,8 @@ class MemoryStatus(str, Enum):
 
 
 _MEMORY_VERSION = re.compile(r"pm-(?:pending|[0-9a-f]{64})")
+_MAX_NESTED_JSON_DEPTH = 8
+_MAX_NESTED_JSON_CHARACTERS = 16_384
 
 
 @dataclass(frozen=True)
@@ -217,16 +219,15 @@ def _normalized_content(value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("content must be a non-empty string")
     content = " ".join(value.split())
-    try:
-        decoded = json.loads(content)
-    except json.JSONDecodeError:
-        decoded = None
+    decoded = _decode_json_string(content)
     if _contains_raw_conversation(decoded):
         raise ValueError("raw run conversation content is not permitted")
     return content
 
 
-def _contains_raw_conversation(value: object) -> bool:
+def _contains_raw_conversation(value: object, depth: int = 0) -> bool:
+    if depth > _MAX_NESTED_JSON_DEPTH:
+        return True
     if isinstance(value, dict):
         normalized_keys = {
             re.sub(r"[^a-z0-9]", "", str(key).casefold()) for key in value
@@ -247,10 +248,30 @@ def _contains_raw_conversation(value: object) -> bool:
             for key in normalized_keys
         ):
             return True
-        return any(_contains_raw_conversation(item) for item in value.values())
+        return any(
+            _contains_raw_conversation(item, depth + 1) for item in value.values()
+        )
     if isinstance(value, list):
-        return any(_contains_raw_conversation(item) for item in value)
+        return any(_contains_raw_conversation(item, depth + 1) for item in value)
+    if isinstance(value, str):
+        decoded = _decode_json_string(value)
+        return decoded is not None and _contains_raw_conversation(decoded, depth + 1)
     return False
+
+
+def _decode_json_string(value: str) -> object | None:
+    if len(value) > _MAX_NESTED_JSON_CHARACTERS:
+        if _looks_like_json(value):
+            return {"prompt": "oversized JSON-shaped memory content"}
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+
+def _looks_like_json(value: str) -> bool:
+    return value.lstrip().startswith(("{", "[", '"'))
 
 
 def _nonempty(value: object, name: str) -> None:

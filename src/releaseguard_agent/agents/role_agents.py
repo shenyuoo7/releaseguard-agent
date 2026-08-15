@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from releaseguard_agent.agent_tools import (
@@ -28,6 +29,51 @@ class EvidenceAgentOutput:
     supplemental_attempted: bool
     manual_review_required: bool
     degraded_reason: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "evidence": [item.to_dict() for item in self.evidence],
+            "sufficient": self.sufficient,
+            "supplemental_attempted": self.supplemental_attempted,
+            "manual_review_required": self.manual_review_required,
+            "degraded_reason": self.degraded_reason,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "EvidenceAgentOutput":
+        _exact_keys(
+            value,
+            {
+                "evidence",
+                "sufficient",
+                "supplemental_attempted",
+                "manual_review_required",
+                "degraded_reason",
+            },
+            "evidence output",
+        )
+        raw_evidence = value["evidence"]
+        if not isinstance(raw_evidence, (list, tuple)) or not all(
+            isinstance(item, Mapping) for item in raw_evidence
+        ):
+            raise ValueError("evidence output evidence must be a list")
+        degraded_reason = value["degraded_reason"]
+        if degraded_reason is not None and not isinstance(degraded_reason, str):
+            raise ValueError("degraded_reason must be a string or null")
+        return cls(
+            evidence=tuple(
+                _retrieval_evidence_from_dict(item)
+                for item in raw_evidence
+            ),
+            sufficient=_boolean(value["sufficient"], "sufficient"),
+            supplemental_attempted=_boolean(
+                value["supplemental_attempted"], "supplemental_attempted"
+            ),
+            manual_review_required=_boolean(
+                value["manual_review_required"], "manual_review_required"
+            ),
+            degraded_reason=degraded_reason,
+        )
 
 
 class EvidenceAgent:
@@ -138,6 +184,47 @@ class RiskAgentOutput:
     llm_failed: bool
     error_type: str | None
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "analysis": dict(self.analysis),
+            "evidence_ids": list(self.evidence_ids),
+            "llm_attempted": self.llm_attempted,
+            "llm_failed": self.llm_failed,
+            "error_type": self.error_type,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "RiskAgentOutput":
+        _exact_keys(
+            value,
+            {
+                "analysis",
+                "evidence_ids",
+                "llm_attempted",
+                "llm_failed",
+                "error_type",
+            },
+            "risk output",
+        )
+        analysis = value["analysis"]
+        evidence_ids = value["evidence_ids"]
+        error_type = value["error_type"]
+        if not isinstance(analysis, Mapping):
+            raise ValueError("risk analysis must be an object")
+        if not isinstance(evidence_ids, (list, tuple)) or not all(
+            isinstance(item, str) and item for item in evidence_ids
+        ):
+            raise ValueError("risk evidence_ids must contain strings")
+        if error_type is not None and not isinstance(error_type, str):
+            raise ValueError("risk error_type must be a string or null")
+        return cls(
+            analysis=dict(analysis),
+            evidence_ids=tuple(evidence_ids),
+            llm_attempted=_boolean(value["llm_attempted"], "llm_attempted"),
+            llm_failed=_boolean(value["llm_failed"], "llm_failed"),
+            error_type=error_type,
+        )
+
 
 class RiskAgent:
     """Analyze risk while preserving the deterministic release decision."""
@@ -188,6 +275,50 @@ class FixPlannerAgentOutput:
     covered_rule_ids: tuple[str, ...]
     evidence_ids: tuple[str, ...]
     requires_manual_changes: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "steps": [dict(step) for step in self.steps],
+            "covered_rule_ids": list(self.covered_rule_ids),
+            "evidence_ids": list(self.evidence_ids),
+            "requires_manual_changes": self.requires_manual_changes,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "FixPlannerAgentOutput":
+        _exact_keys(
+            value,
+            {
+                "steps",
+                "covered_rule_ids",
+                "evidence_ids",
+                "requires_manual_changes",
+            },
+            "fix planner output",
+        )
+        raw_steps = value["steps"]
+        covered = value["covered_rule_ids"]
+        evidence_ids = value["evidence_ids"]
+        if not isinstance(raw_steps, (list, tuple)) or not all(
+            isinstance(step, Mapping) for step in raw_steps
+        ):
+            raise ValueError("fix planner steps must contain objects")
+        for values, name in (
+            (covered, "covered_rule_ids"),
+            (evidence_ids, "evidence_ids"),
+        ):
+            if not isinstance(values, (list, tuple)) or not all(
+                isinstance(item, str) and item for item in values
+            ):
+                raise ValueError(f"{name} must contain strings")
+        return cls(
+            steps=tuple(dict(step) for step in raw_steps),
+            covered_rule_ids=tuple(covered),
+            evidence_ids=tuple(evidence_ids),
+            requires_manual_changes=_boolean(
+                value["requires_manual_changes"], "requires_manual_changes"
+            ),
+        )
 
 
 class FixPlannerAgent:
@@ -351,6 +482,60 @@ class ReleaseRoleAgents:
     risk: RiskAgent
     fix_planner: FixPlannerAgent
     verifier: VerifierAgent
+
+
+def _exact_keys(
+    value: Mapping[str, Any],
+    expected: set[str],
+    label: str,
+) -> None:
+    actual = set(value)
+    if actual != expected:
+        raise ValueError(
+            f"{label} keys do not match: missing={sorted(expected - actual)}, "
+            f"unknown={sorted(actual - expected)}"
+        )
+
+
+def _boolean(value: object, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be boolean")
+    return value
+
+
+def _retrieval_evidence_from_dict(
+    value: Mapping[str, Any],
+) -> RetrievalEvidence:
+    expected = {
+        "evidence_id",
+        "rule_id",
+        "source_url",
+        "local_source",
+        "chunk_id",
+        "retrieval_method",
+        "raw_score",
+        "fusion_score",
+        "rerank_score",
+        "text",
+        "metadata",
+    }
+    _exact_keys(value, expected, "retrieval evidence")
+    metadata = value["metadata"]
+    if not isinstance(metadata, Mapping):
+        raise ValueError("retrieval evidence metadata must be an object")
+    return RetrievalEvidence(
+        evidence_id=str(value["evidence_id"]),
+        rule_id=str(value["rule_id"]),
+        source_url=str(value["source_url"]),
+        local_source=str(value["local_source"]),
+        chunk_id=str(value["chunk_id"]),
+        retrieval_method=str(value["retrieval_method"]),
+        raw_score=float(value["raw_score"]),
+        fusion_score=float(value["fusion_score"]),
+        rerank_score=float(value["rerank_score"]),
+        text=str(value["text"]),
+        metadata={str(key): str(item) for key, item in metadata.items()},
+    )
 
 
 def _evidence_is_sufficient(

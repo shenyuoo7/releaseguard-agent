@@ -42,9 +42,9 @@ def test_linux_ci_runs_quality_tests_eval_and_container_smoke() -> None:
     for required in (
         "ruff check src tests scripts",
         "mypy src/releaseguard_agent",
-        "pytest -p no:cacheprovider tests/unit",
-        "pytest -p no:cacheprovider tests/integration",
-        "pytest -p no:cacheprovider tests/e2e",
+        "pytest -p no:cacheprovider --basetemp .runtime/pytest-unit tests/unit",
+        "pytest -p no:cacheprovider --basetemp .runtime/pytest-integration tests/integration",
+        "pytest -p no:cacheprovider --basetemp .runtime/pytest-e2e tests/e2e",
         "releaseguard_agent.cli.main evaluate",
         "docker build",
         "docker run",

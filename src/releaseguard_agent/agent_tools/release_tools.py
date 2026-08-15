@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from releaseguard_agent.agents.release_risk_analysis_agent import (
     ReportDetailLevel,
@@ -10,12 +10,19 @@ from releaseguard_agent.agents.release_risk_analysis_agent import (
 from releaseguard_agent.llm import LLMRuntime, OpenAIClientRequestError
 from releaseguard_agent.models.retrieval_evidence import RetrievalEvidence
 from releaseguard_agent.observability import ExecutionTracer
-from releaseguard_agent.rag import RetrievalResult, RuleRetrievalService
+from releaseguard_agent.rag import (
+    RetrievalResult,
+    RuleRetrievalService,
+    get_default_rule_index_path,
+)
 from releaseguard_agent.services.release_review_service import (
     ReleaseReviewResult,
     ReleaseReviewService,
     build_agent_advice_result,
 )
+
+if TYPE_CHECKING:
+    from releaseguard_agent.runtime import ToolExecutionContext, ToolRegistry
 
 
 class ScanProjectTool:
@@ -106,6 +113,13 @@ class RiskAnalysisTool:
         self._runtime = runtime
         self._locale = locale
         self._detail_level = detail_level
+
+    @property
+    def network_policy(self) -> str:
+        """Expose whether this configured instance can contact an LLM provider."""
+
+        runtime = self._runtime
+        return "network" if runtime is not None and runtime.client is not None else "offline"
 
     def invoke(
         self,
@@ -242,6 +256,212 @@ class ReleaseWorkflowTools:
     evidence: EvidenceSearchTool
     risk: RiskAnalysisTool
     fix_plan: FixPlanTool
+
+
+def build_release_tool_registry(
+    tools: ReleaseWorkflowTools | None = None,
+    *,
+    allowed_roots: tuple[Path, ...] | None = None,
+) -> "ToolRegistry":
+    """Register durable, read-only adapters without changing legacy tool APIs."""
+
+    from releaseguard_agent.runtime import ToolRegistry, ToolSpec
+
+    workflow_tools = tools or ReleaseWorkflowTools(
+        scan=ScanProjectTool(),
+        evidence=EvidenceSearchTool(RuleRetrievalService(get_default_rule_index_path())),
+        risk=RiskAnalysisTool(),
+        fix_plan=FixPlanTool(),
+    )
+    review_roots = allowed_roots or (Path(__file__).resolve().parents[3],)
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="scan_project",
+            version="1",
+            input_schema={"project_path": str, "include_pytest_execution": bool},
+            output_schema={"review_ref": str, "release_allowed": bool, "report": dict},
+            side_effect="read_only",
+            allowed_roots=review_roots,
+            network_policy="offline",
+            timeout_ms=60_000,
+            max_retries=1,
+            budget_cost=1,
+            required_approval_scope=None,
+        ),
+        lambda args, context: _runtime_scan(workflow_tools.scan, args, context),
+    )
+    registry.register(
+        ToolSpec(
+            name="search_rule_evidence",
+            version="1",
+            input_schema={
+                "review_ref": str,
+                "retrieval_mode": str,
+                "top_k": int,
+                "minimum_evidence": int,
+            },
+            output_schema={
+                "evidence_ref": str,
+                "evidence_output": dict,
+            },
+            side_effect="read_only",
+            allowed_roots=(),
+            network_policy="offline",
+            timeout_ms=10_000,
+            max_retries=0,
+            budget_cost=1,
+            required_approval_scope=None,
+        ),
+        lambda args, context: _runtime_evidence(workflow_tools.evidence, args, context),
+    )
+    registry.register(
+        ToolSpec(
+            name="analyze_risk",
+            version="1",
+            input_schema={"review_ref": str, "evidence_ref": str},
+            output_schema={"risk_ref": str, "risk_output": dict},
+            side_effect=(
+                "network"
+                if getattr(workflow_tools.risk, "network_policy", "network")
+                == "network"
+                else "read_only"
+            ),
+            allowed_roots=(),
+            network_policy=getattr(workflow_tools.risk, "network_policy", "network"),
+            timeout_ms=30_000,
+            max_retries=0,
+            budget_cost=1,
+            required_approval_scope=(
+                "network.llm"
+                if getattr(workflow_tools.risk, "network_policy", "network")
+                == "network"
+                else None
+            ),
+        ),
+        lambda args, context: _runtime_risk(workflow_tools.risk, args, context),
+    )
+    registry.register(
+        ToolSpec(
+            name="build_fix_plan",
+            version="1",
+            input_schema={
+                "review_ref": str,
+                "evidence_ref": str,
+                "risk_ref": str,
+            },
+            output_schema={"fix_plan_output": dict},
+            side_effect="read_only",
+            allowed_roots=(),
+            network_policy="offline",
+            timeout_ms=10_000,
+            max_retries=0,
+            budget_cost=1,
+            required_approval_scope=None,
+        ),
+        lambda args, context: _runtime_fix_plan(workflow_tools.fix_plan, args, context),
+    )
+    return registry
+
+
+def _runtime_scan(
+    tool: ScanProjectTool,
+    args: dict[str, Any],
+    context: "ToolExecutionContext",
+) -> dict[str, Any]:
+    review = tool.invoke(
+        Path(args["project_path"]),
+        include_pytest_execution=args["include_pytest_execution"],
+    )
+    report = review.to_dict()
+    review_ref = f"review:{_runtime_digest(report)}"
+    context.references[review_ref] = review
+    return {
+        "review_ref": review_ref,
+        "release_allowed": review.release_allowed,
+        "report": report,
+    }
+
+
+def _runtime_evidence(
+    tool: EvidenceSearchTool,
+    args: dict[str, Any],
+    context: "ToolExecutionContext",
+) -> dict[str, Any]:
+    from releaseguard_agent.agents.role_agents import (
+        EvidenceAgent,
+        EvidenceAgentInput,
+    )
+
+    review = context.references.get(args["review_ref"])
+    if not isinstance(review, ReleaseReviewResult):
+        raise ValueError("unknown review reference")
+    output = EvidenceAgent(tool).run(
+        EvidenceAgentInput(
+            review=review,
+            retrieval_mode=args["retrieval_mode"],
+            top_k=args["top_k"],
+            minimum_evidence=args["minimum_evidence"],
+        )
+    )
+    payload = output.to_dict()
+    evidence_ref = f"evidence:{_runtime_digest(payload)}"
+    context.references[evidence_ref] = output.evidence
+    return {"evidence_ref": evidence_ref, "evidence_output": payload}
+
+
+def _runtime_risk(
+    tool: RiskAnalysisTool,
+    args: dict[str, Any],
+    context: "ToolExecutionContext",
+) -> dict[str, Any]:
+    from releaseguard_agent.agents.role_agents import RiskAgent, RiskAgentInput
+
+    review = context.references.get(args["review_ref"])
+    evidence = context.references.get(args["evidence_ref"])
+    if not isinstance(review, ReleaseReviewResult) or not isinstance(evidence, tuple):
+        raise ValueError("unknown review or evidence reference")
+    output = RiskAgent(tool).run(
+        RiskAgentInput(review=review, evidence=evidence)
+    )
+    payload = output.to_dict()
+    risk_ref = f"risk:{_runtime_digest(payload)}"
+    context.references[risk_ref] = output
+    return {"risk_ref": risk_ref, "risk_output": payload}
+
+
+def _runtime_fix_plan(
+    tool: FixPlanTool,
+    args: dict[str, Any],
+    context: "ToolExecutionContext",
+) -> dict[str, Any]:
+    from releaseguard_agent.agents.role_agents import (
+        FixPlannerAgent,
+        FixPlannerAgentInput,
+        RiskAgentOutput,
+    )
+
+    review = context.references.get(args["review_ref"])
+    evidence = context.references.get(args["evidence_ref"])
+    risk = context.references.get(args["risk_ref"])
+    if (
+        not isinstance(review, ReleaseReviewResult)
+        or not isinstance(evidence, tuple)
+        or not isinstance(risk, RiskAgentOutput)
+    ):
+        raise ValueError("unknown review, evidence, or risk reference")
+    output = FixPlannerAgent(tool).run(
+        FixPlannerAgentInput(review=review, risk=risk, evidence=evidence)
+    )
+    return {"fix_plan_output": output.to_dict()}
+
+
+def _runtime_digest(value: object) -> str:
+    """Avoid importing durable runtime modules during legacy tool import."""
+
+    from releaseguard_agent.runtime.models import sha256_json
+
+    return sha256_json(value)
 
 
 def _deterministic_risk_payload(

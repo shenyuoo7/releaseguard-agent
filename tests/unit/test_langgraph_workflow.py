@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from releaseguard_agent.agent_tools import (
     EvidenceSearchTool,
     FixPlanTool,
@@ -9,6 +11,11 @@ from releaseguard_agent.agent_tools import (
     ScanProjectTool,
 )
 from releaseguard_agent.llm import FakeLLMClient, LLMResponse, LLMRuntime
+from releaseguard_agent.agents.role_agents import (
+    EvidenceAgentOutput,
+    FixPlannerAgentOutput,
+    RiskAgentOutput,
+)
 from releaseguard_agent.rag import (
     RetrievalResult,
     RuleRetrievalService,
@@ -171,3 +178,82 @@ def test_compiled_graph_exposes_real_nodes_and_edges() -> None:
         "manual_review",
     }.issubset(graph.nodes)
     assert len(graph.edges) >= 9
+
+
+def test_pure_graph_routes_committed_role_outputs_without_invoking_tools() -> None:
+    class ExplodingScan(ScanProjectTool):
+        def invoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("pure graph invoked scan")
+
+    class ExplodingEvidence(EvidenceSearchTool):
+        def invoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("pure graph invoked evidence")
+
+    class ExplodingRisk(RiskAnalysisTool):
+        def invoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("pure graph invoked risk")
+
+    class ExplodingFix(FixPlanTool):
+        def invoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("pure graph invoked fix planner")
+
+    review = ReleaseReviewService().review(
+        project_path=SAMPLES / "fastapi_bad_project",
+        include_pytest_execution=False,
+    )
+    evidence = EvidenceAgentOutput(
+        evidence=review.retrieval_evidence,
+        sufficient=True,
+        supplemental_attempted=False,
+        manual_review_required=False,
+        degraded_reason=None,
+    )
+    risk = RiskAgentOutput(
+        analysis={
+            "analysis_source": "deterministic",
+            "release_allowed": review.release_allowed,
+        },
+        evidence_ids=tuple(item.evidence_id for item in evidence.evidence),
+        llm_attempted=False,
+        llm_failed=False,
+        error_type=None,
+    )
+    fix = FixPlannerAgentOutput(
+        steps=(),
+        covered_rule_ids=(),
+        evidence_ids=(),
+    )
+    service = ReleaseAgentWorkflowService(
+        tools=ReleaseWorkflowTools(
+            scan=ExplodingScan(),
+            evidence=ExplodingEvidence(
+                RuleRetrievalService(get_default_rule_index_path())
+            ),
+            risk=ExplodingRisk(),
+            fix_plan=ExplodingFix(),
+        )
+    )
+
+    result = service.evaluate_committed(
+        review=review,
+        evidence_output=evidence,
+        risk_output=risk,
+        fix_plan_output=fix,
+    )
+
+    assert result.state["route_history"] == [
+        "scan",
+        "evidence_agent",
+        "risk_agent",
+        "fix_planner_agent",
+    ]
+
+
+def test_pure_graph_fails_closed_when_committed_role_output_is_missing() -> None:
+    review = ReleaseReviewService().review(
+        project_path=SAMPLES / "fastapi_bad_project",
+        include_pytest_execution=False,
+    )
+
+    with pytest.raises(ValueError, match="committed evidence"):
+        ReleaseAgentWorkflowService().evaluate_committed(review=review)

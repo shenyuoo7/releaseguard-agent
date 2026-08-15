@@ -5,6 +5,7 @@ from releaseguard_agent.agent_tools.release_tools import (
     RiskAnalysisTool,
     RiskToolResult,
     ScanProjectTool,
+    build_release_tool_registry,
 )
 
 
@@ -15,4 +16,5 @@ __all__ = (
     "RiskAnalysisTool",
     "RiskToolResult",
     "ScanProjectTool",
+    "build_release_tool_registry",
 )

@@ -1,4 +1,3 @@
-from pathlib import Path
 from collections.abc import Callable
 from typing import Any, Literal, TypedDict
 
@@ -6,12 +5,9 @@ from langgraph.graph import END, START, StateGraph
 
 from releaseguard_agent.agent_tools import ScanProjectTool
 from releaseguard_agent.agents.role_agents import (
-    EvidenceAgentInput,
     EvidenceAgentOutput,
-    FixPlannerAgentInput,
     FixPlannerAgentOutput,
     ReleaseRoleAgents,
-    RiskAgentInput,
     RiskAgentOutput,
     VerifierAgentInput,
     VerifierAgentOutput,
@@ -115,11 +111,11 @@ def build_release_graph(
     """Build and compile the conditional four-role ReleaseGuard StateGraph."""
 
     def scan(state: ReleaseGraphState) -> ReleaseGraphState:
-        review = scan_tool.invoke(
-            Path(state["project_path"]),
-            include_pytest_execution=state.get("include_pytest_execution", True),
-            tracer=tracer,
-        )
+        review = state.get("review")
+        if review is None:
+            raise ValueError(
+                "pure release graph requires a precomputed review"
+            )
         return {
             "review": review,
             "route": "scanned",
@@ -162,14 +158,11 @@ def build_release_graph(
         return _record_route(tracer, "verifier_agent", destination)
 
     def evidence_agent(state: ReleaseGraphState) -> ReleaseGraphState:
-        output = agents.evidence.run(
-            EvidenceAgentInput(
-                review=state["review"],
-                retrieval_mode=state.get("retrieval_mode", "hybrid"),
-                top_k=state.get("top_k", 5),
-                minimum_evidence=state.get("minimum_evidence", 1),
+        output = state.get("evidence_output")
+        if output is None:
+            raise ValueError(
+                "pure release graph requires committed evidence output"
             )
-        )
         return {
             "evidence_output": output,
             "evidence": output.evidence,
@@ -187,12 +180,11 @@ def build_release_graph(
         return _record_route(tracer, "evidence_agent", destination)
 
     def risk_agent(state: ReleaseGraphState) -> ReleaseGraphState:
-        output = agents.risk.run(
-            RiskAgentInput(
-                review=state["review"],
-                evidence=state.get("evidence", ()),
+        output = state.get("risk_output")
+        if output is None:
+            raise ValueError(
+                "pure release graph requires committed risk output"
             )
-        )
         return {
             "risk_output": output,
             "risk_analysis": output.analysis,
@@ -216,13 +208,11 @@ def build_release_graph(
         }
 
     def fix_planner_agent(state: ReleaseGraphState) -> ReleaseGraphState:
-        output = agents.fix_planner.run(
-            FixPlannerAgentInput(
-                review=state["review"],
-                risk=state["risk_output"],
-                evidence=state.get("evidence", ()),
+        output = state.get("fix_plan_output")
+        if output is None:
+            raise ValueError(
+                "pure release graph requires committed fix-plan output"
             )
-        )
         return {
             "fix_plan_output": output,
             "fix_plan": output.steps,

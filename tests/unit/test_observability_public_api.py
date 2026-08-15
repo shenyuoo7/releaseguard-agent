@@ -16,7 +16,7 @@ def test_observability_public_api_exports_trace_writer_helpers() -> None:
     assert TRACE_FILE_NAME == "trace.json"
     assert TRACE_SCHEMA_VERSION == "1.0"
     assert TraceArtifacts.__name__ == "TraceArtifacts"
-    assert EXECUTION_TRACE_SCHEMA_VERSION == "1.0"
+    assert EXECUTION_TRACE_SCHEMA_VERSION == "1.2"
     assert callable(ExecutionTraceArtifacts)
     assert callable(ExecutionTracer)
     assert callable(TraceSpan)

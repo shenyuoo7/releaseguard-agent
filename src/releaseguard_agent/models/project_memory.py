@@ -119,6 +119,15 @@ class ProjectMemoryRecord:
         }
 
 
+def validate_project_memory_record_for_persistence(record: ProjectMemoryRecord) -> None:
+    """Reapply frozen-record validation at the durable source boundary."""
+
+    if not isinstance(record, ProjectMemoryRecord):
+        raise ValueError("memory record must use the frozen record contract")
+    record.__post_init__()
+    reject_sensitive_tool_arguments(record.to_dict())
+
+
 @dataclass(frozen=True)
 class ProjectMemoryManifest:
     schema_version: str
@@ -212,11 +221,36 @@ def _normalized_content(value: object) -> str:
         decoded = json.loads(content)
     except json.JSONDecodeError:
         decoded = None
-    if isinstance(decoded, dict) and {"messages", "conversation", "prompt"} & set(
-        decoded
-    ):
+    if _contains_raw_conversation(decoded):
         raise ValueError("raw run conversation content is not permitted")
     return content
+
+
+def _contains_raw_conversation(value: object) -> bool:
+    if isinstance(value, dict):
+        normalized_keys = {
+            re.sub(r"[^a-z0-9]", "", str(key).casefold()) for key in value
+        }
+        if {"role", "content"}.issubset(normalized_keys):
+            return True
+        if any(
+            key in {
+                "history",
+                "messages",
+                "conversation",
+                "chat",
+                "chathistory",
+                "transcript",
+                "turns",
+            }
+            or "prompt" in key
+            for key in normalized_keys
+        ):
+            return True
+        return any(_contains_raw_conversation(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_raw_conversation(item) for item in value)
+    return False
 
 
 def _nonempty(value: object, name: str) -> None:

@@ -153,6 +153,65 @@ def test_child_source_rejects_a_supersession_not_in_its_parent(tmp_path: Path) -
         )
 
 
+def test_child_source_rejects_active_replacement_pair_without_tombstone(
+    tmp_path: Path,
+) -> None:
+    """A new active replacement cannot leave its active parent record in place."""
+
+    store = ProjectMemoryStore(runtime_root(tmp_path))
+    parent = store.publish("project-alpha", (record("memory-1"),))
+
+    with pytest.raises(ProjectMemoryIntegrityError, match="supersedes"):
+        store.publish(
+            "project-alpha",
+            (
+                record("memory-1"),
+                record("memory-2", supersedes="memory-1"),
+            ),
+            parent_memory_version=parent.manifest.memory_version,
+        )
+
+
+def test_child_source_rejects_mutating_an_existing_active_memory_id(
+    tmp_path: Path,
+) -> None:
+    """Content is immutable under a retained active ID; replacements need a new ID."""
+
+    store = ProjectMemoryStore(runtime_root(tmp_path))
+    parent = store.publish("project-alpha", (record("memory-1"),))
+
+    with pytest.raises(ProjectMemoryIntegrityError, match="immutable"):
+        store.publish(
+            "project-alpha",
+            (record("memory-1", content="Changed release constraint."),),
+            parent_memory_version=parent.manifest.memory_version,
+        )
+
+
+def test_child_source_allows_explicit_superseded_transition_with_replacement(
+    tmp_path: Path,
+) -> None:
+    """The one retained-ID lifecycle transition stays explicit and auditable."""
+
+    store = ProjectMemoryStore(runtime_root(tmp_path))
+    parent = store.publish("project-alpha", (record("memory-1"),))
+
+    child = store.publish(
+        "project-alpha",
+        (
+            replace(record("memory-1"), status=MemoryStatus.SUPERSEDED),
+            record("memory-2", supersedes="memory-1"),
+        ),
+        parent_memory_version=parent.manifest.memory_version,
+    )
+
+    assert child.tombstone_ids == ()
+    assert {item.memory_id: item.status for item in child.records} == {
+        "memory-1": MemoryStatus.SUPERSEDED,
+        "memory-2": MemoryStatus.ACTIVE,
+    }
+
+
 def test_cache_rebuilds_from_verified_source_and_cannot_change_records(
     tmp_path: Path,
 ) -> None:
@@ -307,6 +366,47 @@ def test_source_rejects_raw_conversation_and_lifecycle_ineligible_records(
         "superseded",
         "expired",
     }
+
+
+@pytest.mark.parametrize(
+    "conversation_payload",
+    (
+        '[{"role":"user","content":"release"}]',
+        '{"history":[{"role":"assistant","content":"reply"}]}',
+        '{"context":{"messages":[{"role":"user","content":"release"}]}}',
+        '{"input":{"system_prompt":"summarize the release"}}',
+    ),
+)
+def test_store_rejects_recursive_raw_conversation_payloads_before_artifacts(
+    tmp_path: Path,
+    conversation_payload: str,
+) -> None:
+    """Transcript structures cannot be smuggled through JSON-shaped memory content."""
+
+    root = runtime_root(tmp_path)
+    with pytest.raises(ValueError, match="conversation"):
+        ProjectMemoryStore(root).publish(
+            "project-alpha", (record(content=conversation_payload),)
+        )
+
+    assert not list(root.glob("pm-*"))
+    assert not (root / "cache").exists()
+
+
+def test_publish_revalidates_mutated_record_before_hash_or_source_write(
+    tmp_path: Path,
+) -> None:
+    """Frozen-object bypasses cannot put a secret in source or derived cache bytes."""
+
+    root = runtime_root(tmp_path)
+    altered = record()
+    object.__setattr__(altered, "content", "token=abcdefghi")
+
+    with pytest.raises(ValueError, match="sensitive"):
+        ProjectMemoryStore(root).publish("project-alpha", (altered,))
+
+    assert not list(root.glob("pm-*"))
+    assert not (root / "cache").exists()
 
 
 def test_cache_tamper_rebuilds_before_a_source_record_is_returned(tmp_path: Path) -> None:

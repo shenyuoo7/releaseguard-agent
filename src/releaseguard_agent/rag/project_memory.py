@@ -22,6 +22,7 @@ from releaseguard_agent.models.project_memory import (
     MemoryStatus,
     ProjectMemoryManifest,
     ProjectMemoryRecord,
+    validate_project_memory_record_for_persistence,
 )
 from releaseguard_agent.runtime.tools import reject_sensitive_tool_arguments
 
@@ -348,9 +349,10 @@ class MemoryContextAssembler:
 def _prepare_records(
     project_id: str, records: Iterable[ProjectMemoryRecord]
 ) -> tuple[ProjectMemoryRecord, ...]:
-    prepared = tuple(sorted(records, key=lambda item: item.memory_id))
-    if any(not isinstance(item, ProjectMemoryRecord) for item in prepared):
-        raise ValueError("memory records must use the frozen record contract")
+    candidates = tuple(records)
+    for item in candidates:
+        validate_project_memory_record_for_persistence(item)
+    prepared = tuple(sorted(candidates, key=lambda item: item.memory_id))
     if any(item.project_id != project_id for item in prepared):
         raise ValueError("memory records must belong to the published project")
     if any(item.memory_version != "pm-pending" for item in prepared):
@@ -395,18 +397,50 @@ def _validate_snapshot(
         if snapshot.tombstone_ids:
             raise ProjectMemoryIntegrityError("initial memory source cannot contain tombstones")
     else:
-        parent_ids = {item.memory_id for item in parent.records}
-        current_ids = {item.memory_id for item in records}
+        parent_by_id = {item.memory_id: item for item in parent.records}
+        current_by_id = {item.memory_id: item for item in records}
+        parent_ids = set(parent_by_id)
+        current_ids = set(current_by_id)
         expected_tombstone_ids = tuple(
             sorted(set(parent.tombstone_ids) | (parent_ids - current_ids))
         )
         if snapshot.tombstone_ids != expected_tombstone_ids:
             raise ProjectMemoryIntegrityError("memory tombstone chain is invalid")
         if any(
-            item.supersedes is not None and item.supersedes not in parent_ids
+            item.supersedes is not None
+            and (
+                item.supersedes not in parent_by_id
+                or parent_by_id[item.supersedes].status is not MemoryStatus.ACTIVE
+            )
             for item in records
         ):
             raise ProjectMemoryIntegrityError("memory supersedes reference is not in parent")
+        for item in records:
+            if item.supersedes is None:
+                continue
+            replaced = current_by_id.get(item.supersedes)
+            if replaced is not None and replaced.status is MemoryStatus.ACTIVE:
+                raise ProjectMemoryIntegrityError(
+                    "memory supersedes target must be tombstoned or transitioned"
+                )
+            if replaced is not None and not _is_supersession_transition(
+                parent_by_id[item.supersedes], replaced
+            ):
+                raise ProjectMemoryIntegrityError(
+                    "memory supersedes transition is invalid"
+                )
+        for memory_id in parent_ids & current_ids:
+            parent_record = parent_by_id[memory_id]
+            current_record = current_by_id[memory_id]
+            if _record_preimage(parent_record) == _record_preimage(current_record):
+                continue
+            if _is_supersession_transition(parent_record, current_record):
+                if not any(item.supersedes == memory_id for item in records):
+                    raise ProjectMemoryIntegrityError(
+                        "memory transition requires a replacement supersedes reference"
+                    )
+                continue
+            raise ProjectMemoryIntegrityError("memory records are immutable by ID")
     expected_records = _sha256(_canonical_bytes([_record_preimage(item) for item in records]))
     expected_tombstones = _sha256(_canonical_bytes(list(snapshot.tombstone_ids)))
     if (expected_records, expected_tombstones) != (manifest.records_sha256, manifest.tombstones_sha256):
@@ -579,6 +613,22 @@ def _record_preimage(record: ProjectMemoryRecord) -> dict[str, object]:
     value = record.to_dict()
     value.pop("memory_version")
     return value
+
+
+def _is_supersession_transition(
+    parent_record: ProjectMemoryRecord,
+    current_record: ProjectMemoryRecord,
+) -> bool:
+    if (
+        parent_record.status is not MemoryStatus.ACTIVE
+        or current_record.status is not MemoryStatus.SUPERSEDED
+    ):
+        return False
+    parent_value = _record_preimage(parent_record)
+    current_value = _record_preimage(current_record)
+    parent_value.pop("status")
+    current_value.pop("status")
+    return parent_value == current_value
 
 
 def _content_sha256(*, project_id: str, parent_memory_version: str | None, records_sha256: str, tombstones_sha256: str) -> str:

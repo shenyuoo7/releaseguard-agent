@@ -25,12 +25,14 @@ from releaseguard_agent.services.release_review_service import (
 )
 from releaseguard_agent.rag.project_memory import (
     ProjectMemoryIntegrityError,
+    ProjectMemoryVersionMissingError,
     ProjectMemoryStore,
     select_memory_context,
 )
 from releaseguard_agent.rag.relation_index import (
     RelationIndexIntegrityError,
     RelationIndexStore,
+    RelationIndexVersionMissingError,
 )
 
 if TYPE_CHECKING:
@@ -81,6 +83,7 @@ class ArtifactContextRequest:
     relation_budget: RelationQueryBudget
     memory_budget: MemoryQueryBudget
     memory_as_of_utc: str
+    recorded_trace: ArtifactContextTrace | None = None
 
 
 @dataclass(frozen=True)
@@ -148,7 +151,21 @@ class EvidenceSearchTool:
         normalized_mode = request.retrieval_mode.strip().lower()
         relation_snapshot: RelationSnapshot | None = None
         if normalized_mode in {"local_graph", "graph_hybrid"}:
-            if request.relation_index_version is None:
+            if (
+                request.recorded_trace is not None
+                and request.recorded_trace.relation_fallback_reason
+                == "relation_snapshot_missing"
+            ):
+                trace = replace(
+                    trace,
+                    relation_fallback_reason="relation_snapshot_missing",
+                )
+            elif request.relation_budget.max_hops > 2:
+                trace = replace(
+                    trace,
+                    relation_fallback_reason="relation_hop_budget_exceeded",
+                )
+            elif request.relation_index_version is None:
                 trace = replace(
                     trace,
                     relation_fallback_reason="relation_snapshot_not_requested",
@@ -163,21 +180,20 @@ class EvidenceSearchTool:
                     relation_snapshot = self._relation_store.load(
                         request.relation_index_version
                     )
+                except RelationIndexVersionMissingError:
+                    trace = replace(
+                        trace,
+                        relation_fallback_reason="relation_snapshot_missing",
+                    )
                 except RelationIndexIntegrityError as exc:
-                    if "unavailable" in str(exc).lower():
-                        trace = replace(
+                    raise ArtifactContextIntegrityError(
+                        replace(
                             trace,
-                            relation_fallback_reason="relation_snapshot_missing",
+                            relation_fallback_reason=(
+                                "relation_snapshot_integrity_failure"
+                            ),
                         )
-                    else:
-                        raise ArtifactContextIntegrityError(
-                            replace(
-                                trace,
-                                relation_fallback_reason=(
-                                    "relation_snapshot_integrity_failure"
-                                ),
-                            )
-                        ) from exc
+                    ) from exc
                 else:
                     trace = replace(
                         trace,
@@ -191,7 +207,17 @@ class EvidenceSearchTool:
             )
 
         memory_context: MemoryContext | None = None
-        if request.memory_version is None:
+        if (
+            request.recorded_trace is not None
+            and request.recorded_trace.memory_fallback_reason
+            == "memory_snapshot_missing"
+        ):
+            trace = replace(
+                trace,
+                memory_mode="evidence_gap",
+                memory_fallback_reason="memory_snapshot_missing",
+            )
+        elif request.memory_version is None:
             trace = replace(
                 trace,
                 memory_fallback_reason="memory_not_requested",
@@ -213,28 +239,20 @@ class EvidenceSearchTool:
                 memory_snapshot = self._memory_store.load(
                     request.project_id, request.memory_version
                 )
+            except ProjectMemoryVersionMissingError:
+                trace = replace(
+                    trace,
+                    memory_mode="evidence_gap",
+                    memory_fallback_reason="memory_snapshot_missing",
+                )
             except ProjectMemoryIntegrityError as exc:
-                message = str(exc).lower()
-                if "unavailable" in message:
-                    trace = replace(
+                raise ArtifactContextIntegrityError(
+                    replace(
                         trace,
-                        memory_mode="evidence_gap",
-                        memory_fallback_reason="memory_snapshot_missing",
+                        memory_mode="integrity_failure",
+                        memory_fallback_reason="memory_snapshot_integrity_failure",
                     )
-                elif "project or version does not match" in message:
-                    trace = replace(
-                        trace,
-                        memory_mode="evidence_gap",
-                        memory_fallback_reason="memory_project_scope_mismatch",
-                    )
-                else:
-                    raise ArtifactContextIntegrityError(
-                        replace(
-                            trace,
-                            memory_mode="integrity_failure",
-                            memory_fallback_reason="memory_snapshot_integrity_failure",
-                        )
-                    ) from exc
+                ) from exc
             else:
                 memory_context = select_memory_context(
                     memory_snapshot,
@@ -359,8 +377,6 @@ def _validate_relation_inputs(
     if relation_budget is not None:
         if not isinstance(relation_budget, RelationQueryBudget):
             raise ValueError("relation_budget must be a RelationQueryBudget.")
-        if relation_budget.max_hops > 2:
-            raise ValueError("relation_budget.max_hops must not exceed 2.")
 
 
 def _relation_path_id(
@@ -707,6 +723,7 @@ def _runtime_evidence(
     from releaseguard_agent.agents.role_agents import (
         EvidenceAgent,
         EvidenceAgentInput,
+        EvidenceAgentOutput,
     )
 
     review = context.references.get(args["review_ref"])
@@ -758,7 +775,11 @@ def _runtime_evidence(
     )
     payload = output.to_durable_dict()
     evidence_ref = f"evidence:{_runtime_digest(payload)}"
-    context.references[evidence_ref] = output.evidence
+    # Downstream roles consume the same ID/provenance-only contract on a fresh
+    # run and after recovery; raw retrieval text never becomes durable state.
+    context.references[evidence_ref] = EvidenceAgentOutput.from_dict(
+        payload
+    ).evidence
     return {"evidence_ref": evidence_ref, "evidence_output": payload}
 
 
@@ -778,6 +799,12 @@ def _prepare_runtime_evidence(
     if relation_budget is None or memory_budget is None:
         raise ValueError("artifact budgets are required")
     query, _, relevant_rule_ids = evidence_query(review)
+    raw_recorded = args.get("artifact_context")
+    recorded_trace = (
+        ArtifactContextTrace.from_dict(raw_recorded)
+        if isinstance(raw_recorded, dict)
+        else None
+    )
     try:
         resolved = tool.resolve_artifact_context(
             ArtifactContextRequest(
@@ -792,6 +819,7 @@ def _prepare_runtime_evidence(
                 relation_budget=relation_budget,
                 memory_budget=memory_budget,
                 memory_as_of_utc=args["memory_as_of_utc"],
+                recorded_trace=recorded_trace,
             )
         )
     except ArtifactContextIntegrityError as exc:
@@ -809,7 +837,6 @@ def _prepare_runtime_evidence(
     prepared_args = _prepared_evidence_arguments(
         args, resolved.trace, artifact_context_ref=context_ref
     )
-    raw_recorded = args.get("artifact_context")
     recorded_ref = args.get("artifact_context_ref")
     if raw_recorded is not None and (
         raw_recorded != resolved.trace.to_dict() or recorded_ref != context_ref

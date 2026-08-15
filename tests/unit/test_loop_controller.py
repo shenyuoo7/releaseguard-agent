@@ -1,6 +1,7 @@
 import hashlib
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 from releaseguard_agent.agent_tools import (
@@ -545,6 +546,164 @@ def test_missing_artifacts_fallback_before_start_and_corruption_pauses_closed(
     )
     assert not any(event.event_kind == "TOOL_FAILED" for event in corrupt_events)
     corrupt_store.close()
+
+
+def test_missing_internal_artifact_or_parent_pauses_before_evidence_handler(
+    tmp_path: Path,
+) -> None:
+    """Only an absent requested top-level version is an optional fallback."""
+
+    artifact_root = PROJECT_ROOT / ".runtime" / "task4-integrity-boundary" / hashlib.sha256(
+        str(tmp_path).encode("utf-8")
+    ).hexdigest()[:16]
+    relation_root = artifact_root / "relations"
+    memory_root = artifact_root / "memory"
+    relation = RelationIndexBuilder().build(
+        get_default_rule_index_path(), relation_root
+    )
+    memory_store = ProjectMemoryStore(memory_root)
+    parent_memory = memory_store.publish(
+        "project-alpha", (_runtime_memory_record("safe parent memory"),)
+    )
+    child_memory = memory_store.publish(
+        "project-alpha",
+        (replace(parent_memory.records[0], memory_version="pm-pending"),),
+        parent_memory_version=parent_memory.manifest.memory_version,
+    )
+
+    class CountingEvidence(EvidenceSearchTool):
+        def __init__(self) -> None:
+            super().__init__(
+                RuleRetrievalService(
+                    get_default_rule_index_path(),
+                    relation_snapshot_root=relation_root,
+                ),
+                relation_snapshot_root=relation_root,
+                memory_root=memory_root,
+            )
+            self.calls = 0
+
+        def invoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return super().invoke(*args, **kwargs)
+
+    nodes_path = relation_root / relation.manifest.index_version / "nodes.json"
+    hidden_nodes = nodes_path.with_name("nodes.hidden")
+    nodes_path.rename(hidden_nodes)
+    missing_child_tool = CountingEvidence()
+    missing_child_controller, missing_child_store = _controller(
+        tmp_path / "missing-child", _tools(evidence=missing_child_tool)
+    )
+    missing_child = missing_child_controller.run(
+        LoopRequest(
+            project_path=SAMPLES / "fastapi_bad_project",
+            task_kind="REVIEW",
+            budget=RunBudget(max_steps=4, max_tool_calls=4, max_retries=0),
+            retrieval_mode="graph_hybrid",
+            relation_index_version=relation.manifest.index_version,
+        )
+    )
+    assert missing_child.status == "PAUSED"
+    assert missing_child.metrics["stop_reason"] == "artifact_integrity_failure"
+    assert missing_child_tool.calls == 0
+    missing_child_store.close()
+    hidden_nodes.rename(nodes_path)
+
+    parent_path = memory_root / parent_memory.manifest.memory_version
+    hidden_parent = memory_root / f"hidden-{parent_memory.manifest.memory_version}"
+    parent_path.rename(hidden_parent)
+    missing_parent_tool = CountingEvidence()
+    missing_parent_controller, missing_parent_store = _controller(
+        tmp_path / "missing-parent", _tools(evidence=missing_parent_tool)
+    )
+    missing_parent = missing_parent_controller.run(
+        LoopRequest(
+            project_path=SAMPLES / "fastapi_bad_project",
+            task_kind="REVIEW",
+            budget=RunBudget(max_steps=4, max_tool_calls=4, max_retries=0),
+            memory_project_id="project-alpha",
+            memory_version=child_memory.manifest.memory_version,
+        )
+    )
+    assert missing_parent.status == "PAUSED"
+    assert missing_parent.metrics["stop_reason"] == "artifact_integrity_failure"
+    assert missing_parent_tool.calls == 0
+    missing_parent_store.close()
+    hidden_parent.rename(parent_path)
+
+
+def test_relation_hop_budget_falls_back_before_tool_start(
+    tmp_path: Path,
+) -> None:
+    """Unsupported graph depth is a deterministic text fallback, not failure."""
+
+    relation_root = (
+        PROJECT_ROOT
+        / ".runtime"
+        / "task4-hop-budget"
+        / hashlib.sha256(str(tmp_path).encode("utf-8")).hexdigest()[:16]
+    )
+    relation = RelationIndexBuilder().build(
+        get_default_rule_index_path(), relation_root
+    )
+
+    class CountingEvidence(EvidenceSearchTool):
+        def __init__(self) -> None:
+            super().__init__(
+                RuleRetrievalService(
+                    get_default_rule_index_path(),
+                    relation_snapshot_root=relation_root,
+                ),
+                relation_snapshot_root=relation_root,
+            )
+            self.calls = 0
+
+        def invoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return super().invoke(*args, **kwargs)
+
+    evidence = CountingEvidence()
+    controller, store = _controller(
+        tmp_path / "hop-budget", _tools(evidence=evidence)
+    )
+    result = controller.run(
+        LoopRequest(
+            project_path=SAMPLES / "fastapi_bad_project",
+            task_kind="REVIEW",
+            budget=RunBudget(max_steps=4, max_tool_calls=4, max_retries=0),
+            retrieval_mode="graph_hybrid",
+            relation_index_version=relation.manifest.index_version,
+            relation_budget=RelationQueryBudget(3, 24, 24, 8_000),
+        )
+    )
+
+    assert result.status == "COMPLETED"
+    assert evidence.calls >= 1
+    events = store.events(result.run_id)
+    requested = next(
+        event
+        for event in events
+        if event.event_kind == "TOOL_REQUESTED"
+        and event.payload["tool_name"] == "search_rule_evidence"
+    )
+    requested_args = json.loads(str(requested.payload["canonical_args"]))
+    assert requested_args["relation_budget"]["max_hops"] == 3
+    assert requested_args["artifact_context"]["relation_fallback_reason"] == (
+        "relation_hop_budget_exceeded"
+    )
+    started = next(
+        event
+        for event in events
+        if event.event_kind == "TOOL_STARTED"
+        and event.payload["idempotency_key"] == requested.payload["idempotency_key"]
+    )
+    assert requested.sequence < started.sequence
+    assert not any(
+        event.event_kind == "TOOL_FAILED"
+        and event.payload["idempotency_key"] == requested.payload["idempotency_key"]
+        for event in events
+    )
+    store.close()
 
 
 def _runtime_memory_record(content: str) -> ProjectMemoryRecord:

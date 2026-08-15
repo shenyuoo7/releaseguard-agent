@@ -33,6 +33,10 @@ class ProjectMemoryIntegrityError(ValueError):
     """Raised when a project-memory source or derived cache is not trustworthy."""
 
 
+class ProjectMemoryVersionMissingError(ProjectMemoryIntegrityError):
+    """Raised only when the explicitly requested top-level version is absent."""
+
+
 @dataclass(frozen=True)
 class ProjectMemorySnapshot:
     manifest: ProjectMemoryManifest
@@ -182,6 +186,16 @@ class ProjectMemoryStore:
 
         _nonempty(project_id, "project_id")
         _validate_memory_version(memory_version)
+        try:
+            (self._output_root / memory_version).lstat()
+        except FileNotFoundError as error:
+            raise ProjectMemoryVersionMissingError(
+                "requested memory source version is absent"
+            ) from error
+        except OSError as error:
+            raise ProjectMemoryIntegrityError(
+                "requested memory source version cannot be inspected"
+            ) from error
         return self._load(project_id, memory_version, seen=())
 
     def _load(

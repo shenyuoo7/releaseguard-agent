@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from releaseguard_agent.agent_tools import (
+    ArtifactContextIntegrityError,
     ArtifactContextRequest,
     EvidenceSearchTool,
     FixPlanTool,
@@ -143,24 +144,24 @@ def test_evidence_tool_resolves_verified_artifacts_without_mutating_sources(
     )
     assert historical.trace.selected_memory_ids == ("memory-expired",)
 
-    scoped_out = tool.resolve_artifact_context(
-        ArtifactContextRequest(
-            project_id="project-beta",
-            query="FastAPI dependency evidence",
-            active_run_references=(),
-            retrieval_mode="graph_hybrid",
-            relation_index_version=relation.manifest.index_version,
-            memory_version=memory.manifest.memory_version,
-            relation_budget=RelationQueryBudget(2, 24, 24, 8_000),
-            memory_budget=MemoryQueryBudget(1, 200, 30),
-            memory_as_of_utc="2026-08-15T00:00:00+00:00",
+    with pytest.raises(ArtifactContextIntegrityError) as scope_error:
+        tool.resolve_artifact_context(
+            ArtifactContextRequest(
+                project_id="project-beta",
+                query="FastAPI dependency evidence",
+                active_run_references=(),
+                retrieval_mode="graph_hybrid",
+                relation_index_version=relation.manifest.index_version,
+                memory_version=memory.manifest.memory_version,
+                relation_budget=RelationQueryBudget(2, 24, 24, 8_000),
+                memory_budget=MemoryQueryBudget(1, 200, 30),
+                memory_as_of_utc="2026-08-15T00:00:00+00:00",
+            )
         )
-    )
-    assert scoped_out.memory_context is None
-    assert scoped_out.trace.selected_memory_ids == ()
+    assert scope_error.value.trace.memory_mode == "integrity_failure"
     assert (
-        scoped_out.trace.memory_fallback_reason
-        == "memory_project_scope_mismatch"
+        scope_error.value.trace.memory_fallback_reason
+        == "memory_snapshot_integrity_failure"
     )
 
     exhausted = tool.resolve_artifact_context(

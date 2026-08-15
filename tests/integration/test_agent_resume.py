@@ -15,6 +15,7 @@ from releaseguard_agent.agent_tools import (
     ScanProjectTool,
     build_release_tool_registry,
 )
+from releaseguard_agent.llm import FakeLLMClient, LLMRuntime
 from releaseguard_agent.observability import ExecutionTracer
 from releaseguard_agent.models.project_memory import (
     MemoryKind,
@@ -66,6 +67,21 @@ class CrashAfterToolRequestedController(LoopController):
             raise InjectedCrash("crash after durable request")
 
 
+class CrashAfterEvidenceRequestedController(LoopController):
+    def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kwargs)
+        self.crash_armed = True
+
+    def _after_event(self, event: RunEvent) -> None:
+        if (
+            self.crash_armed
+            and event.event_kind == "TOOL_REQUESTED"
+            and event.payload.get("tool_name") == "search_rule_evidence"
+        ):
+            self.crash_armed = False
+            raise InjectedCrash("crash after durable evidence request")
+
+
 class CrashAfterToolResultController(LoopController):
     def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         super().__init__(*args, **kwargs)
@@ -97,6 +113,22 @@ class CrashAfterToolCompletedController(LoopController):
         if self.crash_armed and event.event_kind == "TOOL_COMPLETED":
             self.crash_armed = False
             raise InjectedCrash("crash after durable completion event")
+
+
+class CrashAfterEvidenceCompletedController(LoopController):
+    def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kwargs)
+        self.crash_armed = True
+
+    def _after_event(self, event: RunEvent) -> None:
+        if (
+            self.crash_armed
+            and event.event_kind == "TOOL_COMPLETED"
+            and "search_rule_evidence"
+            in str(event.payload.get("idempotency_key", ""))
+        ):
+            self.crash_armed = False
+            raise InjectedCrash("crash after durable evidence completion")
 
 
 class CrashAfterToolFailedController(LoopController):
@@ -1170,6 +1202,232 @@ def test_terminal_artifact_replay_pins_recorded_versions_and_trace_identity(
     assert replay_args["memory_version"] != newer_memory.manifest.memory_version
     assert replay_args["memory_as_of_utc"] == "2019-01-01T00:00:00+00:00"
     replay_store.close()
+
+
+def test_recorded_missing_artifact_fallback_survives_later_publication_and_replay(
+    tmp_path: Path,
+) -> None:
+    """A durable absence decision must not be reinterpreted after publication."""
+
+    artifact_root = PROJECT_ROOT / ".runtime" / "task4-missing-replay" / hashlib.sha256(
+        str(tmp_path).encode("utf-8")
+    ).hexdigest()[:16]
+    relation_root = artifact_root / "relations"
+    memory_root = artifact_root / "memory"
+    relation = RelationIndexBuilder().build(
+        get_default_rule_index_path(), relation_root
+    )
+    memory = ProjectMemoryStore(memory_root).publish(
+        "project-alpha", (_resume_memory_record("memory-late", "Late memory."),)
+    )
+    relation_path = relation_root / relation.manifest.index_version
+    memory_path = memory_root / memory.manifest.memory_version
+    hidden_relation = relation_root / f"hidden-{relation.manifest.index_version}"
+    hidden_memory = memory_root / f"hidden-{memory.manifest.memory_version}"
+    relation_path.rename(hidden_relation)
+    memory_path.rename(hidden_memory)
+    retrieval = RuleRetrievalService(
+        get_default_rule_index_path(), relation_snapshot_root=relation_root
+    )
+
+    class CountingEvidence(EvidenceSearchTool):
+        def __init__(self) -> None:
+            super().__init__(
+                retrieval,
+                relation_snapshot_root=relation_root,
+                memory_root=memory_root,
+            )
+            self.calls = 0
+
+        def invoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return super().invoke(*args, **kwargs)
+
+    root = tmp_path / "missing-then-published"
+    initial_evidence = CountingEvidence()
+    controller, store = _components(
+        root,
+        CountingScanTool(),
+        CrashAfterEvidenceRequestedController,
+        allowed_roots=(BLOCKING_SAMPLE,),
+        evidence=initial_evidence,
+    )
+    request = LoopRequest(
+        project_path=BLOCKING_SAMPLE,
+        task_kind="REVIEW",
+        budget=RunBudget(max_steps=4, max_tool_calls=4, max_retries=0),
+        retrieval_mode="graph_hybrid",
+        relation_index_version=relation.manifest.index_version,
+        memory_project_id="project-alpha",
+        memory_version=memory.manifest.memory_version,
+    )
+    with pytest.raises(InjectedCrash):
+        controller.run(request)
+    run_id = controller.last_run_id
+    recorded_request = store.events(run_id)[-1]
+    assert recorded_request.event_kind == "TOOL_REQUESTED"
+    recorded_args = json.loads(str(recorded_request.payload["canonical_args"]))
+    assert recorded_args["artifact_context"]["relation_fallback_reason"] == (
+        "relation_snapshot_missing"
+    )
+    assert recorded_args["artifact_context"]["memory_fallback_reason"] == (
+        "memory_snapshot_missing"
+    )
+    assert initial_evidence.calls == 0
+    store.close()
+
+    hidden_relation.rename(relation_path)
+    hidden_memory.rename(memory_path)
+    resumed_evidence = CountingEvidence()
+    resumed_controller, resumed_store = _components(
+        root,
+        CountingScanTool(),
+        allowed_roots=(BLOCKING_SAMPLE,),
+        evidence=resumed_evidence,
+    )
+    completed = resumed_controller.resume(run_id)
+    for _ in range(4):
+        if completed.status != "RUNNING":
+            break
+        completed = resumed_controller.resume(run_id)
+    assert completed.status == "COMPLETED"
+    assert resumed_evidence.calls >= 1
+    event_count = len(resumed_store.events(run_id))
+    resumed_store.close()
+
+    replay_evidence = CountingEvidence()
+    replay_controller, replay_store = _components(
+        root,
+        CountingScanTool(),
+        allowed_roots=(BLOCKING_SAMPLE,),
+        evidence=replay_evidence,
+    )
+    replayed = replay_controller.resume(run_id)
+    assert replayed.status == "COMPLETED"
+    assert replay_evidence.calls == 0
+    assert len(replay_store.events(run_id)) == event_count
+    replay_request = next(
+        event
+        for event in replay_store.events(run_id)
+        if event.event_kind == "TOOL_REQUESTED"
+        and event.payload["tool_name"] == "search_rule_evidence"
+    )
+    assert json.loads(str(replay_request.payload["canonical_args"])) == recorded_args
+    replay_store.close()
+
+
+def test_completed_evidence_resume_preserves_exact_risk_prompt_without_raw_persistence(
+    tmp_path: Path,
+) -> None:
+    """Fresh and recovered downstream roles consume the same ID-only evidence."""
+
+    retrieval = RuleRetrievalService(get_default_rule_index_path())
+
+    class CountingEvidence(EvidenceSearchTool):
+        def __init__(self) -> None:
+            super().__init__(retrieval)
+            self.calls = 0
+            self.raw_texts: set[str] = set()
+
+        def invoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            result = super().invoke(*args, **kwargs)
+            self.raw_texts.update(
+                item.text for item in result.evidence if item.text
+            )
+            return result
+
+    class RecordingOfflineRisk(RiskAnalysisTool):
+        def __init__(self) -> None:
+            self.client = FakeLLMClient(["not-json"])
+            super().__init__(
+                LLMRuntime(
+                    provider="fake",
+                    mode="fake",
+                    model="fake-model",
+                    client=self.client,
+                )
+            )
+            self.outputs: list[dict[str, object]] = []
+
+        @property
+        def network_policy(self) -> str:
+            return "offline"
+
+        def invoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            result = super().invoke(*args, **kwargs)
+            self.outputs.append(dict(result.payload))
+            return result
+
+    request = LoopRequest(
+        project_path=BLOCKING_SAMPLE,
+        task_kind="REVIEW",
+        budget=RunBudget(max_steps=4, max_tool_calls=4, max_retries=0),
+    )
+    baseline_evidence = CountingEvidence()
+    baseline_risk = RecordingOfflineRisk()
+    baseline_controller, baseline_store = _components(
+        tmp_path / "evidence-baseline",
+        CountingScanTool(),
+        allowed_roots=(BLOCKING_SAMPLE,),
+        evidence=baseline_evidence,
+        risk=baseline_risk,
+    )
+    baseline = baseline_controller.run(request)
+    assert baseline.status == "COMPLETED"
+    assert len(baseline_risk.client.calls) == 1
+    baseline_prompt = baseline_risk.client.calls[0].messages
+    baseline_output = baseline_risk.outputs[0]
+    baseline_store.close()
+
+    root = tmp_path / "evidence-crash"
+    initial_evidence = CountingEvidence()
+    initial_risk = RecordingOfflineRisk()
+    crashing, crashing_store = _components(
+        root,
+        CountingScanTool(),
+        CrashAfterEvidenceCompletedController,
+        allowed_roots=(BLOCKING_SAMPLE,),
+        evidence=initial_evidence,
+        risk=initial_risk,
+    )
+    with pytest.raises(InjectedCrash):
+        crashing.run(request)
+    run_id = crashing.last_run_id
+    assert initial_evidence.calls >= 1
+    assert initial_evidence.raw_texts
+    assert initial_risk.client.calls == []
+    crashing_store.close()
+
+    resumed_evidence = CountingEvidence()
+    resumed_risk = RecordingOfflineRisk()
+    resumed_controller, resumed_store = _components(
+        root,
+        CountingScanTool(),
+        allowed_roots=(BLOCKING_SAMPLE,),
+        evidence=resumed_evidence,
+        risk=resumed_risk,
+    )
+    completed = resumed_controller.resume(run_id)
+    for _ in range(4):
+        if completed.status != "RUNNING":
+            break
+        completed = resumed_controller.resume(run_id)
+    assert completed.status == "COMPLETED"
+    assert resumed_evidence.calls == 0
+    assert len(resumed_risk.client.calls) == 1
+    assert resumed_risk.client.calls[0].messages == baseline_prompt
+    assert resumed_risk.outputs == [baseline_output]
+
+    with sqlite3.connect(root / "agent_runs.sqlite3") as connection:
+        durable = repr([
+            *connection.execute("SELECT * FROM run_events").fetchall(),
+            *connection.execute("SELECT * FROM run_snapshots").fetchall(),
+            *connection.execute("SELECT * FROM tool_results").fetchall(),
+        ])
+    for raw_text in initial_evidence.raw_texts:
+        assert raw_text not in durable
+    resumed_store.close()
 
 
 def _resume_memory_record(

@@ -34,6 +34,14 @@ class RelationIndexIntegrityError(ValueError):
     """Raised when an immutable relation snapshot fails closed validation."""
 
 
+class RelationIndexVersionMissingError(RelationIndexIntegrityError):
+    """Raised only when the explicitly requested top-level version is absent."""
+
+
+class RelationIndexSchemaIncompatibleError(RelationIndexIntegrityError):
+    """Raised when verified bytes declare an unsupported snapshot schema."""
+
+
 class RelationIndexBuilder:
     """Create atomically published relation snapshots from trusted rule inputs."""
 
@@ -105,6 +113,16 @@ class RelationIndexStore:
     def load(self, index_version: str) -> RelationSnapshot:
         """Read one version after validating bytes, provenance, and topology."""
         _validate_index_version(index_version)
+        try:
+            (self._output_root / index_version).lstat()
+        except FileNotFoundError as error:
+            raise RelationIndexVersionMissingError(
+                "Requested relation snapshot version is absent."
+            ) from error
+        except OSError as error:
+            raise RelationIndexIntegrityError(
+                "Requested relation snapshot version cannot be inspected."
+            ) from error
         return self._load(index_version, seen_versions=())
 
     def _load(
@@ -565,7 +583,9 @@ def _validate_snapshot(
     parent: RelationSnapshot | None,
 ) -> None:
     if manifest.schema_version != _SCHEMA_VERSION:
-        raise RelationIndexIntegrityError("Unsupported relation snapshot schema.")
+        raise RelationIndexSchemaIncompatibleError(
+            "Unsupported relation snapshot schema."
+        )
     if not _is_sha256(manifest.source_index_sha256):
         raise RelationIndexIntegrityError("Invalid source index digest.")
     if not _is_sha256(manifest.content_sha256):

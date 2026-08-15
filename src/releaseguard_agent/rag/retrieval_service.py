@@ -24,7 +24,9 @@ from releaseguard_agent.rag.hybrid_retriever import (
 from releaseguard_agent.rag.vector_retriever import LlamaIndexVectorRetriever
 from releaseguard_agent.rag.relation_index import (
     RelationIndexIntegrityError,
+    RelationIndexSchemaIncompatibleError,
     RelationIndexStore,
+    RelationIndexVersionMissingError,
     _source_index_digest,
 )
 from releaseguard_agent.rag.rule_index_retriever import RuleIndexRetriever
@@ -191,6 +193,7 @@ class RuleRetrievalService:
                 "relation_snapshot_missing",
                 "relation_snapshot_not_requested",
                 "relation_snapshot_unconfigured",
+                "relation_hop_budget_exceeded",
             }:
                 raise ValueError("relation_fallback_reason is invalid")
             return fallback(relation_fallback_reason)
@@ -207,14 +210,12 @@ class RuleRetrievalService:
             assert self._relation_store is not None
             try:
                 snapshot = self._relation_store.load(relation_index_version)
-            except RelationIndexIntegrityError as exc:
-                if "Unsupported relation snapshot schema." in str(exc):
-                    fallback_reason = "relation_snapshot_incompatible"
-                elif "is unavailable" in str(exc):
-                    fallback_reason = "relation_snapshot_missing"
-                else:
-                    fallback_reason = "relation_snapshot_invalid"
-                return fallback(fallback_reason)
+            except RelationIndexVersionMissingError:
+                return fallback("relation_snapshot_missing")
+            except RelationIndexSchemaIncompatibleError:
+                return fallback("relation_snapshot_incompatible")
+            except RelationIndexIntegrityError:
+                return fallback("relation_snapshot_invalid")
         else:
             snapshot = relation_snapshot
             if snapshot.manifest.index_version != relation_index_version:

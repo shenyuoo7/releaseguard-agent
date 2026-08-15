@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING, Any
 
 from releaseguard_agent.agents.release_risk_analysis_agent import (
@@ -8,7 +9,8 @@ from releaseguard_agent.agents.release_risk_analysis_agent import (
     ReleaseRiskAnalysisContext,
 )
 from releaseguard_agent.llm import LLMRuntime, OpenAIClientRequestError
-from releaseguard_agent.models.retrieval_evidence import RetrievalEvidence
+from releaseguard_agent.models.retrieval_evidence import RelationPath, RetrievalEvidence
+from releaseguard_agent.models.relation_index import RelationQueryBudget
 from releaseguard_agent.observability import ExecutionTracer
 from releaseguard_agent.rag import (
     RetrievalResult,
@@ -67,15 +69,42 @@ class EvidenceSearchTool:
         *,
         mode: str,
         top_k: int,
+        seed_rule_ids: tuple[str, ...] | None = None,
+        relation_index_version: str | None = None,
+        relation_budget: RelationQueryBudget | None = None,
         tracer: ExecutionTracer | None = None,
     ) -> RetrievalResult:
+        _validate_relation_inputs(relation_index_version, relation_budget)
         if tracer is None:
-            return self._service.retrieve(query, mode=mode, top_k=top_k)
+            return self._service.retrieve(
+                query,
+                mode=mode,
+                top_k=top_k,
+                seed_rule_ids=seed_rule_ids,
+                relation_index_version=relation_index_version,
+                relation_budget=relation_budget,
+            )
         with tracer.span("retrieval", tool="search_rule_evidence") as span:
-            result = self._service.retrieve(query, mode=mode, top_k=top_k)
+            result = self._service.retrieve(
+                query,
+                mode=mode,
+                top_k=top_k,
+                seed_rule_ids=seed_rule_ids,
+                relation_index_version=relation_index_version,
+                relation_budget=relation_budget,
+            )
             span.update(
                 retrieval_method=result.mode_used,
                 degraded_reason=result.degraded_reason,
+                relation_index_version=relation_index_version,
+                relation_path_count=sum(
+                    len(item.relation_paths) for item in result.evidence
+                ),
+                relation_path_ids=[
+                    _relation_path_id(item, path)
+                    for item in result.evidence
+                    for path in item.relation_paths
+                ],
                 retrieval_candidates=[
                     {
                         "evidence_id": item.evidence_id,
@@ -90,6 +119,31 @@ class EvidenceSearchTool:
                 evidence_ids=[item.evidence_id for item in result.evidence],
             )
             return result
+
+
+def _validate_relation_inputs(
+    relation_index_version: str | None,
+    relation_budget: RelationQueryBudget | None,
+) -> None:
+    if relation_index_version is not None and not re.fullmatch(
+        r"ri-[0-9a-f]{64}", relation_index_version
+    ):
+        raise ValueError("relation_index_version must be a relation snapshot version.")
+    if relation_budget is not None:
+        if not isinstance(relation_budget, RelationQueryBudget):
+            raise ValueError("relation_budget must be a RelationQueryBudget.")
+        if relation_budget.max_hops > 2:
+            raise ValueError("relation_budget.max_hops must not exceed 2.")
+
+
+def _relation_path_id(
+    evidence: RetrievalEvidence,
+    path: RelationPath,
+) -> str:
+    """Return an ID-only trace reference without exposing graph/source text."""
+    return (
+        f"{evidence.evidence_id}:{path.index_version}:{','.join(path.edge_ids)}"
+    )
 
 
 @dataclass(frozen=True)

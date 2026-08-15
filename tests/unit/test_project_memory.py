@@ -231,6 +231,32 @@ def test_child_source_rejects_multiple_replacements_for_one_parent(
         )
 
 
+def test_store_rejects_divergent_successors_from_the_same_parent(
+    tmp_path: Path,
+) -> None:
+    """One immutable parent source has one published successor for each replacement."""
+
+    root = runtime_root(tmp_path)
+    store = ProjectMemoryStore(root)
+    parent = store.publish("project-alpha", (record("memory-1"),))
+    first_child = store.publish(
+        "project-alpha",
+        (record("memory-2", supersedes="memory-1"),),
+        parent_memory_version=parent.manifest.memory_version,
+    )
+    published_before = tuple(sorted(root.glob("pm-*")))
+
+    with pytest.raises(ProjectMemoryIntegrityError, match="published successor"):
+        store.publish(
+            "project-alpha",
+            (record("memory-3", supersedes="memory-1"),),
+            parent_memory_version=parent.manifest.memory_version,
+        )
+
+    assert tuple(sorted(root.glob("pm-*"))) == published_before
+    assert store.load("project-alpha", first_child.manifest.memory_version) == first_child
+
+
 def test_cache_rebuilds_from_verified_source_and_cannot_change_records(
     tmp_path: Path,
 ) -> None:

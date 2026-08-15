@@ -8,10 +8,11 @@ import os
 import shutil
 import sqlite3
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from releaseguard_agent.models.project_memory import (
     MemoryContext,
@@ -100,13 +101,78 @@ class ProjectMemoryStore:
         snapshot = ProjectMemorySnapshot(manifest, final_records, tombstone_ids)
         _validate_snapshot(snapshot, parent)
         version_root = self._output_root / memory_version
-        if version_root.exists():
-            existing = self.load(project_id, memory_version)
-            if existing != snapshot:
-                raise ProjectMemoryIntegrityError("memory version already has conflicting source")
-            return existing
-        _publish_snapshot(self._output_root, snapshot)
+        with _publication_lock(self._output_root):
+            if version_root.exists():
+                existing = self.load(project_id, memory_version)
+                if existing != snapshot:
+                    raise ProjectMemoryIntegrityError(
+                        "memory version already has conflicting source"
+                    )
+                return existing
+            self._reject_divergent_successor(project_id, parent, snapshot)
+            _publish_snapshot(self._output_root, snapshot)
         return self.load(project_id, memory_version)
+
+    def _reject_divergent_successor(
+        self,
+        project_id: str,
+        parent: ProjectMemorySnapshot | None,
+        candidate: ProjectMemorySnapshot,
+    ) -> None:
+        if parent is None:
+            return
+        candidate_targets = {
+            record.supersedes
+            for record in candidate.records
+            if record.supersedes is not None
+        }
+        if not candidate_targets:
+            return
+        for child in self._published_children(project_id, parent.manifest.memory_version):
+            existing_targets = {
+                record.supersedes
+                for record in child.records
+                if record.supersedes is not None
+            }
+            if candidate_targets & existing_targets:
+                raise ProjectMemoryIntegrityError(
+                    "memory parent already has a published successor"
+                )
+
+    def _published_children(
+        self,
+        project_id: str,
+        parent_memory_version: str,
+    ) -> tuple[ProjectMemorySnapshot, ...]:
+        try:
+            entries = tuple(self._output_root.iterdir())
+        except OSError as error:
+            raise ProjectMemoryIntegrityError(
+                "memory source root cannot be enumerated"
+            ) from error
+        children: list[ProjectMemorySnapshot] = []
+        for entry in entries:
+            if not entry.name.startswith("pm-"):
+                continue
+            _validate_memory_version(entry.name)
+            version_root = _resolve_contained_path(
+                entry,
+                self._output_root,
+                "published memory version directory",
+            )
+            if not version_root.is_dir():
+                raise ProjectMemoryIntegrityError(
+                    "published memory version path is not a directory"
+                )
+            manifest = _manifest_from_bytes(
+                _read_artifact(version_root / "manifest.json", version_root)
+            )
+            if manifest.project_id != project_id:
+                continue
+            snapshot = self.load(project_id, manifest.memory_version)
+            if snapshot.manifest.parent_memory_version == parent_memory_version:
+                children.append(snapshot)
+        return tuple(children)
 
     def delete(
         self,
@@ -498,6 +564,29 @@ def _publish_snapshot(output_root: Path, snapshot: ProjectMemorySnapshot) -> Non
     finally:
         if temporary_path.exists():
             shutil.rmtree(temporary_path)
+
+
+@contextmanager
+def _publication_lock(output_root: Path) -> Iterator[None]:
+    _validate_write_path(output_root, _RUNTIME_ROOT, "memory output root")
+    output_root.mkdir(parents=True, exist_ok=True)
+    lock_path = output_root / ".project-memory-publish.lock"
+    _validate_write_path(lock_path, output_root, "memory publication lock")
+    try:
+        os.mkdir(lock_path)
+    except FileExistsError as error:
+        raise ProjectMemoryIntegrityError("memory publication is already in progress") from error
+    try:
+        yield
+    finally:
+        if lock_path.exists():
+            _resolve_contained_path(lock_path, output_root, "memory publication lock")
+            try:
+                lock_path.rmdir()
+            except OSError as error:
+                raise ProjectMemoryIntegrityError(
+                    "memory publication lock cannot be released"
+                ) from error
 
 
 def _cache_matches(path: Path, snapshot: ProjectMemorySnapshot) -> bool:

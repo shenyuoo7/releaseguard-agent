@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from datetime import UTC, datetime
@@ -22,9 +23,11 @@ from releaseguard_agent.rag.corpus import RuleChunk, RuleCorpusLoader
 from releaseguard_agent.rag.rule_index_retriever import RuleIndexRetriever
 
 
-_SCHEMA_VERSION = "1"
+_SCHEMA_VERSION = "2"
 _CHUNKING_CONFIG = (("loader", "RuleCorpusLoader.from_rule_index"),)
 _RETRIEVAL_CONFIG = (("relation_snapshot", "trusted-corpus-only"),)
+_RUNTIME_ROOT = Path(__file__).resolve().parents[3] / ".runtime"
+_INDEX_VERSION_PATTERN = re.compile(r"ri-[0-9a-f]{64}")
 
 
 class RelationIndexIntegrityError(ValueError):
@@ -42,35 +45,51 @@ class RelationIndexBuilder:
         parent_snapshot: RelationSnapshot | None = None,
     ) -> RelationSnapshot:
         """Build or return the content-addressed snapshot for the current corpus."""
+        normalized_output_root = _validate_output_root(output_root)
         normalized_index_path = Path(rule_index_path)
-        normalized_output_root = Path(output_root)
         retriever = RuleIndexRetriever.from_file(normalized_index_path)
         chunks = RuleCorpusLoader.from_rule_index(normalized_index_path)
         source_index_sha256 = _source_index_digest(retriever, chunks)
         parent = _resolve_parent(parent_snapshot, normalized_output_root)
-        parent_sha256 = "" if parent is None else parent.snapshot_sha256
-        index_version = _index_version(source_index_sha256, parent_sha256)
         store = RelationIndexStore(normalized_output_root)
+        nodes, edges = _build_relations(retriever, chunks)
+        change_set = _build_change_set(parent, nodes, edges)
+        nodes_sha256 = _sha256(_canonical_bytes([node.to_dict() for node in nodes]))
+        edges_sha256 = _sha256(_canonical_bytes([edge.to_dict() for edge in edges]))
+        content_sha256 = _content_sha256(
+            schema_version=_SCHEMA_VERSION,
+            source_index_sha256=source_index_sha256,
+            chunking_config=_CHUNKING_CONFIG,
+            retrieval_config=_RETRIEVAL_CONFIG,
+            parent_index_version=(
+                None if parent is None else parent.manifest.index_version
+            ),
+            change_set=change_set,
+            nodes_sha256=nodes_sha256,
+            edges_sha256=edges_sha256,
+            nodes=nodes,
+            edges=edges,
+        )
+        index_version = _index_version(content_sha256)
         output_path = normalized_output_root / index_version
 
         if output_path.exists():
             return store.load(index_version)
 
-        nodes, edges = _build_relations(retriever, chunks)
-        change_set = _build_change_set(parent, nodes, edges)
         manifest = RelationSnapshotManifest(
             schema_version=_SCHEMA_VERSION,
             index_version=index_version,
+            content_sha256=content_sha256,
             source_index_sha256=source_index_sha256,
             chunking_config=_CHUNKING_CONFIG,
             retrieval_config=_RETRIEVAL_CONFIG,
-            created_at_utc=datetime.now(UTC).isoformat(),
+            created_at_utc=_content_created_at_utc(content_sha256),
             parent_index_version=(
                 None if parent is None else parent.manifest.index_version
             ),
             change_set=change_set,
-            nodes_sha256=_sha256(_canonical_bytes([node.to_dict() for node in nodes])),
-            edges_sha256=_sha256(_canonical_bytes([edge.to_dict() for edge in edges])),
+            nodes_sha256=nodes_sha256,
+            edges_sha256=edges_sha256,
         )
         _validate_snapshot(manifest, nodes, edges, parent)
         _publish_snapshot(normalized_output_root, manifest, nodes, edges)
@@ -81,12 +100,11 @@ class RelationIndexStore:
     """Fail-closed reader for immutable relation snapshot directories."""
 
     def __init__(self, output_root: Path) -> None:
-        self._output_root = Path(output_root)
+        self._output_root = _validate_output_root(output_root)
 
     def load(self, index_version: str) -> RelationSnapshot:
         """Read one version after validating bytes, provenance, and topology."""
-        if not index_version or Path(index_version).name != index_version:
-            raise RelationIndexIntegrityError("Invalid relation index version.")
+        _validate_index_version(index_version)
         return self._load(index_version, seen_versions=())
 
     def _load(
@@ -95,6 +113,7 @@ class RelationIndexStore:
         *,
         seen_versions: tuple[str, ...],
     ) -> RelationSnapshot:
+        _validate_index_version(index_version)
         if index_version in seen_versions:
             raise RelationIndexIntegrityError("Relation snapshot parent cycle detected.")
         version_root = self._output_root / index_version
@@ -118,18 +137,18 @@ class RelationIndexStore:
                 manifest.parent_index_version,
                 seen_versions=(*seen_versions, index_version),
             )
-        expected_version = _index_version(
-            manifest.source_index_sha256,
-            "" if parent is None else parent.snapshot_sha256,
-        )
+        _validate_snapshot(manifest, nodes, edges, parent)
+        expected_content_sha256 = _content_sha256_for_snapshot(manifest, nodes, edges)
+        if manifest.content_sha256 != expected_content_sha256:
+            raise RelationIndexIntegrityError("Relation content identity mismatch.")
+        expected_version = _index_version(manifest.content_sha256)
         if expected_version != manifest.index_version:
             raise RelationIndexIntegrityError("Relation snapshot parent binding failed.")
-        _validate_snapshot(manifest, nodes, edges, parent)
         return RelationSnapshot(
             manifest=manifest,
             nodes=nodes,
             edges=edges,
-            snapshot_sha256=_snapshot_digest(manifest, nodes, edges),
+            snapshot_sha256=manifest.content_sha256,
         )
 
 
@@ -163,7 +182,7 @@ def _resolve_parent(
 ) -> RelationSnapshot | None:
     if parent_snapshot is None:
         return None
-    expected_sha256 = _snapshot_digest(
+    expected_sha256 = _content_sha256_for_snapshot(
         parent_snapshot.manifest,
         parent_snapshot.nodes,
         parent_snapshot.edges,
@@ -397,6 +416,7 @@ def _manifest_from_bytes(raw: bytes) -> RelationSnapshotManifest:
             {
                 "schema_version",
                 "index_version",
+                "content_sha256",
                 "source_index_sha256",
                 "chunking_config",
                 "retrieval_config",
@@ -424,6 +444,7 @@ def _manifest_from_bytes(raw: bytes) -> RelationSnapshotManifest:
         return RelationSnapshotManifest(
             schema_version=_required_string(value, "schema_version"),
             index_version=_required_string(value, "index_version"),
+            content_sha256=_required_string(value, "content_sha256"),
             source_index_sha256=_required_string(value, "source_index_sha256"),
             chunking_config=_string_pairs(value, "chunking_config"),
             retrieval_config=_string_pairs(value, "retrieval_config"),
@@ -532,14 +553,18 @@ def _validate_snapshot(
         raise RelationIndexIntegrityError("Unsupported relation snapshot schema.")
     if not _is_sha256(manifest.source_index_sha256):
         raise RelationIndexIntegrityError("Invalid source index digest.")
+    if not _is_sha256(manifest.content_sha256):
+        raise RelationIndexIntegrityError("Invalid relation content identity.")
     if not _is_sha256(manifest.nodes_sha256) or not _is_sha256(manifest.edges_sha256):
         raise RelationIndexIntegrityError("Invalid relation artifact digest.")
-    if not manifest.created_at_utc:
-        raise RelationIndexIntegrityError("Missing relation snapshot creation time.")
+    if manifest.created_at_utc != _content_created_at_utc(manifest.content_sha256):
+        raise RelationIndexIntegrityError("Invalid relation snapshot creation time.")
     if parent is None and manifest.parent_index_version is not None:
         raise RelationIndexIntegrityError("Relation parent snapshot is unavailable.")
     if parent is not None and manifest.parent_index_version != parent.manifest.index_version:
         raise RelationIndexIntegrityError("Relation parent version does not match.")
+    if manifest.change_set != _build_change_set(parent, nodes, edges):
+        raise RelationIndexIntegrityError("Relation change set does not match graph delta.")
     _validate_sorted_unique(
         (node.node_id for node in nodes), "relation node identifiers"
     )
@@ -585,20 +610,58 @@ def _validate_sorted_unique(values: Any, label: str) -> None:
         raise RelationIndexIntegrityError(f"{label.capitalize()} must be sorted and unique.")
 
 
-def _snapshot_digest(
+def _content_sha256_for_snapshot(
     manifest: RelationSnapshotManifest,
+    nodes: tuple[RelationNode, ...],
+    edges: tuple[RelationEdge, ...],
+) -> str:
+    return _content_sha256(
+        schema_version=manifest.schema_version,
+        source_index_sha256=manifest.source_index_sha256,
+        chunking_config=manifest.chunking_config,
+        retrieval_config=manifest.retrieval_config,
+        parent_index_version=manifest.parent_index_version,
+        change_set=manifest.change_set,
+        nodes_sha256=manifest.nodes_sha256,
+        edges_sha256=manifest.edges_sha256,
+        nodes=nodes,
+        edges=edges,
+    )
+
+
+def _content_sha256(
+    *,
+    schema_version: str,
+    source_index_sha256: str,
+    chunking_config: tuple[tuple[str, str], ...],
+    retrieval_config: tuple[tuple[str, str], ...],
+    parent_index_version: str | None,
+    change_set: RelationChangeSet,
+    nodes_sha256: str,
+    edges_sha256: str,
     nodes: tuple[RelationNode, ...],
     edges: tuple[RelationEdge, ...],
 ) -> str:
     return _sha256(
         _canonical_bytes(
             {
-                "manifest": manifest.to_dict(),
+                "schema_version": schema_version,
+                "source_index_sha256": source_index_sha256,
+                "chunking_config": dict(chunking_config),
+                "retrieval_config": dict(retrieval_config),
+                "parent_index_version": parent_index_version,
+                "change_set": change_set.to_dict(),
+                "nodes_sha256": nodes_sha256,
+                "edges_sha256": edges_sha256,
                 "nodes": [node.to_dict() for node in nodes],
                 "edges": [edge.to_dict() for edge in edges],
             }
         )
     )
+
+
+def _content_created_at_utc(content_sha256: str) -> str:
+    return datetime.fromtimestamp(int(content_sha256[:8], 16), UTC).isoformat()
 
 
 def _source_node_id(source_url: str, local_source: str) -> str:
@@ -623,16 +686,27 @@ def _edge_id(
     )[:24]
 
 
-def _index_version(source_index_sha256: str, parent_snapshot_sha256: str) -> str:
-    return "ri-" + _sha256(
-        _canonical_bytes(
-            {
-                "schema_version": _SCHEMA_VERSION,
-                "source_index_sha256": source_index_sha256,
-                "parent_snapshot_sha256": parent_snapshot_sha256,
-            }
-        )
-    )[:24]
+def _index_version(content_sha256: str) -> str:
+    return "ri-" + content_sha256
+
+
+def _validate_output_root(output_root: Path) -> Path:
+    candidate = Path(output_root).expanduser().resolve()
+    runtime_root = _RUNTIME_ROOT.resolve()
+    try:
+        candidate.relative_to(runtime_root)
+    except ValueError as error:
+        raise RelationIndexIntegrityError(
+            "Relation index output root must remain under the configured runtime root."
+        ) from error
+    return candidate
+
+
+def _validate_index_version(index_version: str) -> None:
+    if not isinstance(index_version, str) or _INDEX_VERSION_PATTERN.fullmatch(
+        index_version
+    ) is None:
+        raise RelationIndexIntegrityError("Invalid relation index version.")
 
 
 def _canonical_bytes(value: object) -> bytes:

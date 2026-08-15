@@ -91,6 +91,7 @@ class RelationSnapshotManifest:
 
     schema_version: str
     index_version: str
+    content_sha256: str
     source_index_sha256: str
     chunking_config: tuple[tuple[str, str], ...]
     retrieval_config: tuple[tuple[str, str], ...]
@@ -104,6 +105,7 @@ class RelationSnapshotManifest:
         return {
             "schema_version": self.schema_version,
             "index_version": self.index_version,
+            "content_sha256": self.content_sha256,
             "source_index_sha256": self.source_index_sha256,
             "chunking_config": dict(self.chunking_config),
             "retrieval_config": dict(self.retrieval_config),

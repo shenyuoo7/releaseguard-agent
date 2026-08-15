@@ -113,6 +113,20 @@ def _rewrite_artifact_digest(
     _write_canonical_json(manifest_path, manifest)
 
 
+def _rewrite_artifact_digests(
+    output_root: Path,
+    index_version: str,
+    *,
+    nodes_raw: bytes,
+    edges_raw: bytes,
+) -> None:
+    manifest_path = _snapshot_path(output_root, index_version, "manifest.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["nodes_sha256"] = sha256(nodes_raw).hexdigest()
+    manifest["edges_sha256"] = sha256(edges_raw).hexdigest()
+    _write_canonical_json(manifest_path, manifest)
+
+
 def test_builds_trusted_relation_nodes_edges_and_chunk_provenance() -> None:
     """Would fail if trusted corpus records lose any required relation."""
     with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as temporary_directory:
@@ -156,6 +170,96 @@ def test_repeated_identical_builds_have_stable_content_addressed_identity() -> N
         assert first.snapshot_sha256 == second.snapshot_sha256
         assert first.nodes == second.nodes
         assert first.edges == second.edges
+
+
+def test_identical_input_has_reproducible_identity_across_fresh_runtime_roots() -> None:
+    """Would fail if wall-clock metadata changes a fresh snapshot identity."""
+    with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as temporary_directory:
+        index_path, first_output_root = _build_fixture(Path(temporary_directory))
+        second_output_root = Path(temporary_directory) / "second-snapshots"
+        builder = RelationIndexBuilder()
+
+        first = builder.build(index_path, first_output_root)
+        second = builder.build(index_path, second_output_root)
+
+        assert first.manifest.index_version == second.manifest.index_version
+        assert first.snapshot_sha256 == second.snapshot_sha256
+
+
+def test_store_rejects_coordinated_graph_and_manifest_digest_tampering() -> None:
+    """Would fail if a validly hashed altered graph retains its original identity."""
+    with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as temporary_directory:
+        index_path, output_root = _build_fixture(Path(temporary_directory))
+        snapshot = RelationIndexBuilder().build(index_path, output_root)
+        nodes_path = _snapshot_path(
+            output_root, snapshot.manifest.index_version, "nodes.json"
+        )
+        edges_path = _snapshot_path(
+            output_root, snapshot.manifest.index_version, "edges.json"
+        )
+        nodes = json.loads(nodes_path.read_text(encoding="utf-8"))
+        edges = json.loads(edges_path.read_text(encoding="utf-8"))
+        nodes[0]["description"] = "Coordinated semantic mutation."
+        edges[0]["source_chunk_ids"] = ["RG-TEST-002:chunk-01"]
+        nodes_raw = _write_canonical_json(nodes_path, nodes)
+        edges_raw = _write_canonical_json(edges_path, edges)
+        _rewrite_artifact_digests(
+            output_root,
+            snapshot.manifest.index_version,
+            nodes_raw=nodes_raw,
+            edges_raw=edges_raw,
+        )
+
+        with pytest.raises(RelationIndexIntegrityError, match="content identity"):
+            RelationIndexStore(output_root).load(snapshot.manifest.index_version)
+
+
+def test_store_rederives_change_set_from_parent_and_current_graph() -> None:
+    """Would fail if an altered child delta is trusted without recomputation."""
+    with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as temporary_directory:
+        index_path, output_root = _build_fixture(Path(temporary_directory))
+        builder = RelationIndexBuilder()
+        parent = builder.build(index_path, output_root)
+        _write_corpus(index_path.parent, include_second_rule=False)
+        child = builder.build(index_path, output_root, parent_snapshot=parent)
+        manifest_path = _snapshot_path(
+            output_root, child.manifest.index_version, "manifest.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["change_set"]["tombstoned_node_ids"] = []
+        _write_canonical_json(manifest_path, manifest)
+
+        with pytest.raises(RelationIndexIntegrityError, match="change set"):
+            RelationIndexStore(output_root).load(child.manifest.index_version)
+
+
+def test_rejects_non_runtime_output_roots_and_recursive_parent_traversal() -> None:
+    """Would fail if output or a recursive parent can escape the runtime root."""
+    with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as temporary_directory:
+        index_path, output_root = _build_fixture(Path(temporary_directory))
+        disallowed_root = PROJECT_ROOT / "outputs" / "relation-index"
+
+        with pytest.raises(RelationIndexIntegrityError, match="runtime root"):
+            RelationIndexStore(disallowed_root)
+        with pytest.raises(RelationIndexIntegrityError, match="runtime root"):
+            RelationIndexStore(Path("C:/releaseguard-relation-index"))
+        with pytest.raises(RelationIndexIntegrityError, match="runtime root"):
+            RelationIndexBuilder().build(
+                index_path.parent / "missing-rule-index.md", disallowed_root
+            )
+
+        snapshot = RelationIndexBuilder().build(index_path, output_root)
+        manifest_path = _snapshot_path(
+            output_root, snapshot.manifest.index_version, "manifest.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["parent_index_version"] = "../escaped-parent"
+        _write_canonical_json(manifest_path, manifest)
+
+        with pytest.raises(
+            RelationIndexIntegrityError, match="Invalid relation index version"
+        ):
+            RelationIndexStore(output_root).load(snapshot.manifest.index_version)
 
 
 def test_suppresses_duplicate_relations_and_validates_query_budget() -> None:

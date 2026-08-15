@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import Any, Iterator, Mapping
 
 
-EXECUTION_TRACE_SCHEMA_VERSION = "1.2"
+EXECUTION_TRACE_SCHEMA_VERSION = "1.3"
 _RUNTIME_EVENT_PHASE = 100
 _GUARDRAIL_PHASE = 200
 _SENSITIVE_KEY = re.compile(
@@ -48,6 +48,173 @@ class TraceSpan:
 class ExecutionTraceArtifacts:
     output_dir: Path
     trace_path: Path
+
+
+@dataclass(frozen=True)
+class ArtifactContextTrace:
+    """ID-only replay metadata for immutable relation and memory support."""
+
+    relation_index_version: str | None = None
+    relation_sha256: str | None = None
+    relation_mode: str = "text_only"
+    relation_fallback_reason: str | None = None
+    relation_candidate_ids: tuple[str, ...] = ()
+    relation_path_ids: tuple[str, ...] = ()
+    relation_budget: tuple[tuple[str, int], ...] = ()
+    relation_budget_usage: tuple[tuple[str, int], ...] = ()
+    memory_version: str | None = None
+    memory_sha256: str | None = None
+    memory_mode: str = "not_requested"
+    memory_fallback_reason: str | None = None
+    selected_memory_ids: tuple[str, ...] = ()
+    omitted_memory: tuple[tuple[str, str], ...] = ()
+    memory_budget: tuple[tuple[str, int], ...] = ()
+    memory_budget_usage: tuple[tuple[str, int], ...] = ()
+
+    def __post_init__(self) -> None:
+        for value, prefix, label in (
+            (self.relation_index_version, "ri-", "relation_index_version"),
+            (self.memory_version, "pm-", "memory_version"),
+        ):
+            if value is not None and (
+                not isinstance(value, str)
+                or len(value) != 67
+                or not value.startswith(prefix)
+                or not _is_lower_sha256(value[3:])
+            ):
+                raise ValueError(f"{label} is invalid")
+        for value, label in (
+            (self.relation_sha256, "relation_sha256"),
+            (self.memory_sha256, "memory_sha256"),
+        ):
+            if value is not None and not _is_lower_sha256(value):
+                raise ValueError(f"{label} is invalid")
+        for value, label in (
+            (self.relation_mode, "relation_mode"),
+            (self.memory_mode, "memory_mode"),
+        ):
+            _safe_trace_value(value, label)
+        for value, label in (
+            (self.relation_fallback_reason, "relation_fallback_reason"),
+            (self.memory_fallback_reason, "memory_fallback_reason"),
+        ):
+            if value is not None:
+                _safe_trace_value(value, label)
+        for id_values, label in (
+            (self.relation_candidate_ids, "relation_candidate_ids"),
+            (self.relation_path_ids, "relation_path_ids"),
+            (self.selected_memory_ids, "selected_memory_ids"),
+        ):
+            if tuple(sorted(set(id_values))) != id_values:
+                raise ValueError(f"{label} must be sorted and unique")
+            for value in id_values:
+                _safe_trace_value(value, label)
+        for budget_values, label, allowed_keys in (
+            (
+                self.relation_budget,
+                "relation_budget",
+                {"max_context_characters", "max_edges", "max_hops", "max_nodes"},
+            ),
+            (
+                self.relation_budget_usage,
+                "relation_budget_usage",
+                {"context_characters", "edges", "nodes"},
+            ),
+            (
+                self.memory_budget,
+                "memory_budget",
+                {"max_characters", "max_estimated_units", "top_k"},
+            ),
+            (
+                self.memory_budget_usage,
+                "memory_budget_usage",
+                {"characters", "estimated_units"},
+            ),
+        ):
+            if (
+                tuple(sorted(budget_values)) != budget_values
+                or len(dict(budget_values)) != len(budget_values)
+            ):
+                raise ValueError(f"{label} must be sorted and unique")
+            if not {key for key, _ in budget_values} <= allowed_keys:
+                raise ValueError(f"{label} budget keys are invalid")
+            if any(
+                not isinstance(item, int) or isinstance(item, bool) or item < 0
+                for item in dict(budget_values).values()
+            ):
+                raise ValueError(f"{label} values must be non-negative integers")
+        if tuple(sorted(self.omitted_memory)) != self.omitted_memory:
+            raise ValueError("omitted_memory must be sorted")
+        for memory_id, reason in self.omitted_memory:
+            _safe_trace_value(memory_id, "omitted_memory memory_id")
+            _safe_trace_value(reason, "omitted_memory reason")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "relation_index_version": self.relation_index_version,
+            "relation_sha256": self.relation_sha256,
+            "relation_mode": self.relation_mode,
+            "relation_fallback_reason": self.relation_fallback_reason,
+            "relation_candidate_ids": list(self.relation_candidate_ids),
+            "relation_path_ids": list(self.relation_path_ids),
+            "relation_budget": dict(self.relation_budget),
+            "relation_budget_usage": dict(self.relation_budget_usage),
+            "memory_version": self.memory_version,
+            "memory_sha256": self.memory_sha256,
+            "memory_mode": self.memory_mode,
+            "memory_fallback_reason": self.memory_fallback_reason,
+            "selected_memory_ids": list(self.selected_memory_ids),
+            "omitted_memory": [
+                {"memory_id": memory_id, "reason": reason}
+                for memory_id, reason in self.omitted_memory
+            ],
+            "memory_budget": dict(self.memory_budget),
+            "memory_budget_usage": dict(self.memory_budget_usage),
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ArtifactContextTrace":
+        expected = {
+            "relation_index_version", "relation_sha256", "relation_mode",
+            "relation_fallback_reason", "relation_candidate_ids",
+            "relation_path_ids", "relation_budget", "relation_budget_usage",
+            "memory_version", "memory_sha256", "memory_mode",
+            "memory_fallback_reason", "selected_memory_ids", "omitted_memory",
+            "memory_budget", "memory_budget_usage",
+        }
+        if set(value) != expected:
+            raise ValueError("artifact_context keys do not match the trace schema")
+        omitted = value["omitted_memory"]
+        if not isinstance(omitted, (list, tuple)):
+            raise ValueError("omitted_memory must be a list")
+        omitted_pairs: list[tuple[str, str]] = []
+        for item in omitted:
+            if not isinstance(item, Mapping) or set(item) != {"memory_id", "reason"}:
+                raise ValueError("omitted_memory entries are invalid")
+            omitted_pairs.append(
+                (
+                    _required_string(item["memory_id"], "omitted memory_id"),
+                    _required_string(item["reason"], "omitted reason"),
+                )
+            )
+        return cls(
+            relation_index_version=_optional_string(value["relation_index_version"]),
+            relation_sha256=_optional_string(value["relation_sha256"]),
+            relation_mode=_required_string(value["relation_mode"], "relation_mode"),
+            relation_fallback_reason=_optional_string(value["relation_fallback_reason"]),
+            relation_candidate_ids=_string_tuple(value["relation_candidate_ids"]),
+            relation_path_ids=_string_tuple(value["relation_path_ids"]),
+            relation_budget=_integer_pairs(value["relation_budget"]),
+            relation_budget_usage=_integer_pairs(value["relation_budget_usage"]),
+            memory_version=_optional_string(value["memory_version"]),
+            memory_sha256=_optional_string(value["memory_sha256"]),
+            memory_mode=_required_string(value["memory_mode"], "memory_mode"),
+            memory_fallback_reason=_optional_string(value["memory_fallback_reason"]),
+            selected_memory_ids=_string_tuple(value["selected_memory_ids"]),
+            omitted_memory=tuple(omitted_pairs),
+            memory_budget=_integer_pairs(value["memory_budget"]),
+            memory_budget_usage=_integer_pairs(value["memory_budget_usage"]),
+        )
 
 
 class ExecutionTracer:
@@ -133,6 +300,7 @@ class ExecutionTracer:
         approval_id: str | None = None,
         checkpoint_sequence: int | None = None,
         cost: Mapping[str, Any] | None = None,
+        artifact_context: ArtifactContextTrace | None = None,
         occurred_at: str | None = None,
     ) -> None:
         """Record one durable runtime transition without copying raw payloads."""
@@ -162,6 +330,11 @@ class ExecutionTracer:
                 "guardrail_decision": guardrail_decision,
                 "approval_id": approval_id,
                 "checkpoint_sequence": checkpoint_sequence,
+                "artifact_context": (
+                    artifact_context.to_dict()
+                    if artifact_context is not None
+                    else None
+                ),
             }
         )
 
@@ -368,3 +541,54 @@ def _ordering_key(event_sequence: int, phase: int) -> str:
     if isinstance(event_sequence, bool) or event_sequence < 0:
         raise ValueError("trace event sequence must be non-negative")
     return f"{event_sequence:020d}:{phase:03d}"
+
+
+def _is_lower_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _safe_trace_value(value: object, label: str) -> None:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 512
+        or _SECRET_VALUE.search(value) is not None
+    ):
+        raise ValueError(f"{label} must be a safe non-empty identifier")
+
+
+def _optional_string(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("artifact_context optional values must be strings or null")
+    return value
+
+
+def _required_string(value: object, label: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"artifact_context {label} values must be strings")
+    return value
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)) or not all(
+        isinstance(item, str) for item in value
+    ):
+        raise ValueError("artifact_context identifiers must be a list of strings")
+    return tuple(value)
+
+
+def _integer_pairs(value: object) -> tuple[tuple[str, int], ...]:
+    if not isinstance(value, Mapping):
+        raise ValueError("artifact_context budgets must be objects")
+    if any(not isinstance(key, str) for key in value):
+        raise ValueError("artifact_context budget keys must be strings")
+    pairs = tuple(sorted((key, item) for key, item in value.items()))
+    if any(not isinstance(item, int) or isinstance(item, bool) for _, item in pairs):
+        raise ValueError("artifact_context budget values must be integers")
+    return pairs

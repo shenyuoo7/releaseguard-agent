@@ -1,3 +1,6 @@
+import hashlib
+import json
+import sqlite3
 from pathlib import Path
 
 from releaseguard_agent.agent_tools import (
@@ -9,11 +12,21 @@ from releaseguard_agent.agent_tools import (
     build_release_tool_registry,
 )
 from releaseguard_agent.observability import ExecutionTracer
+from releaseguard_agent.models.project_memory import (
+    MemoryKind,
+    MemoryProvenance,
+    MemoryQueryBudget,
+    MemoryStatus,
+    ProjectMemoryRecord,
+)
+from releaseguard_agent.models.relation_index import RelationQueryBudget
 from releaseguard_agent.rag import (
     RetrievalResult,
     RuleRetrievalService,
     get_default_rule_index_path,
 )
+from releaseguard_agent.rag.project_memory import ProjectMemoryStore
+from releaseguard_agent.rag.relation_index import RelationIndexBuilder
 from releaseguard_agent.runtime.loop import LoopController, LoopRequest
 from releaseguard_agent.runtime.models import RunBudget
 from releaseguard_agent.runtime.store import AgentRunStore
@@ -318,3 +331,240 @@ def test_resuming_a_terminal_run_does_not_append_events(tmp_path: Path) -> None:
     assert resumed.review == completed.review
     assert store.events(completed.run_id) == before
     store.close()
+
+
+def test_versioned_artifact_context_is_fingerprinted_traced_and_never_persists_raw(
+    tmp_path: Path,
+) -> None:
+    """Removing the pre-start envelope or durable sanitization leaks support data."""
+
+    artifact_root = PROJECT_ROOT / ".runtime" / "task4-loop" / hashlib.sha256(
+        str(tmp_path).encode("utf-8")
+    ).hexdigest()[:16]
+    relation_root = artifact_root / "relations"
+    memory_root = artifact_root / "memory"
+    relation = RelationIndexBuilder().build(
+        get_default_rule_index_path(), relation_root
+    )
+    raw_memory = "TASK4-RAW-MEMORY-CONTEXT must never enter durable storage"
+    memory = ProjectMemoryStore(memory_root).publish(
+        "project-alpha", (_runtime_memory_record(raw_memory),)
+    )
+    evidence = EvidenceSearchTool(
+        RuleRetrievalService(
+            get_default_rule_index_path(),
+            relation_snapshot_root=relation_root,
+        ),
+        relation_snapshot_root=relation_root,
+        memory_root=memory_root,
+    )
+    controller, store = _controller(tmp_path, _tools(evidence=evidence))
+
+    result = controller.run(
+        LoopRequest(
+            project_path=SAMPLES / "fastapi_bad_project",
+            task_kind="REVIEW",
+            budget=RunBudget(max_steps=4, max_tool_calls=4, max_retries=0),
+            retrieval_mode="graph_hybrid",
+            relation_index_version=relation.manifest.index_version,
+            memory_project_id="project-alpha",
+            memory_version=memory.manifest.memory_version,
+            relation_budget=RelationQueryBudget(2, 500, 500, 8_000),
+            memory_budget=MemoryQueryBudget(1, 200, 30),
+        )
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.review is not None and result.review.release_allowed is False
+    events = store.events(result.run_id)
+    requested = next(
+        event for event in events
+        if event.event_kind == "TOOL_REQUESTED"
+        and event.payload["tool_name"] == "search_rule_evidence"
+    )
+    args = json.loads(str(requested.payload["canonical_args"]))
+    artifact_context = args["artifact_context"]
+    assert artifact_context["relation_index_version"] == relation.manifest.index_version
+    assert artifact_context["memory_version"] == memory.manifest.memory_version
+    assert artifact_context["selected_memory_ids"] == ["memory-runtime"]
+    assert args["memory_budget"] == {
+        "max_characters": 200,
+        "max_context_units": 30,
+        "top_k": 1,
+    }
+    planned = next(event for event in events if event.event_kind == "PLAN_PROPOSED")
+    assert dict(planned.payload["memory_budget"]) == {
+        "max_characters": 200,
+        "max_context_units": 30,
+        "top_k": 1,
+    }
+    evidence_started = next(
+        event for event in events
+        if event.event_kind == "TOOL_STARTED"
+        and event.payload["idempotency_key"] == requested.payload["idempotency_key"]
+    )
+    assert requested.sequence < evidence_started.sequence
+    with sqlite3.connect(tmp_path / "runtime" / "agent_runs.sqlite3") as connection:
+        durable = repr([
+            *connection.execute("SELECT * FROM run_events").fetchall(),
+            *connection.execute("SELECT * FROM run_snapshots").fetchall(),
+            *connection.execute("SELECT * FROM tool_results").fetchall(),
+        ])
+    assert raw_memory not in durable
+    assert result.trace_path is not None
+    trace = json.loads(result.trace_path.read_text(encoding="utf-8"))
+    trace_text = repr(trace)
+    assert raw_memory not in trace_text
+    traced_contexts = [
+        event["artifact_context"]
+        for event in trace["events"]
+        if event.get("artifact_context")
+    ]
+    assert traced_contexts
+    assert any(context["selected_memory_ids"] == ["memory-runtime"] for context in traced_contexts)
+    assert any(context["relation_path_ids"] for context in traced_contexts)
+    store.close()
+
+
+def test_missing_artifacts_fallback_before_start_and_corruption_pauses_closed(
+    tmp_path: Path,
+) -> None:
+    """Missing support is optional; tampering must never reach the evidence role."""
+
+    artifact_root = PROJECT_ROOT / ".runtime" / "task4-failures" / hashlib.sha256(
+        str(tmp_path).encode("utf-8")
+    ).hexdigest()[:16]
+    relation_root = artifact_root / "relations"
+    memory_root = artifact_root / "memory"
+    relation = RelationIndexBuilder().build(
+        get_default_rule_index_path(), relation_root
+    )
+    memory = ProjectMemoryStore(memory_root).publish(
+        "project-alpha", (_runtime_memory_record("safe task4 memory"),)
+    )
+
+    class CountingEvidence(EvidenceSearchTool):
+        def __init__(self) -> None:
+            super().__init__(
+                RuleRetrievalService(
+                    get_default_rule_index_path(),
+                    relation_snapshot_root=relation_root,
+                ),
+                relation_snapshot_root=relation_root,
+                memory_root=memory_root,
+            )
+            self.calls = 0
+
+        def invoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return super().invoke(*args, **kwargs)
+
+    missing_tool = CountingEvidence()
+    missing_controller, missing_store = _controller(
+        tmp_path / "missing", _tools(evidence=missing_tool)
+    )
+    missing = missing_controller.run(
+        LoopRequest(
+            project_path=SAMPLES / "fastapi_bad_project",
+            task_kind="REVIEW",
+            budget=RunBudget(max_steps=4, max_tool_calls=4, max_retries=0),
+            retrieval_mode="graph_hybrid",
+            relation_index_version="ri-" + "0" * 64,
+            memory_project_id="project-alpha",
+            memory_version="pm-" + "0" * 64,
+            relation_budget=RelationQueryBudget(2, 24, 24, 8_000),
+            memory_budget=MemoryQueryBudget(1, 200, 30),
+        )
+    )
+    assert missing.status == "COMPLETED"
+    assert missing.review is not None and missing.review.release_allowed is False
+    assert missing.status != "WAITING_HITL"
+    missing_request = next(
+        event for event in missing_store.events(missing.run_id)
+        if event.event_kind == "TOOL_REQUESTED"
+        and event.payload["tool_name"] == "search_rule_evidence"
+    )
+    missing_args = json.loads(str(missing_request.payload["canonical_args"]))
+    assert missing_args["artifact_context"]["relation_fallback_reason"] == "relation_snapshot_missing"
+    assert missing_args["artifact_context"]["memory_fallback_reason"] == "memory_snapshot_missing"
+    assert missing_tool.calls >= 1
+    assert not any(
+        event.event_kind == "APPROVAL_REQUESTED"
+        for event in missing_store.events(missing.run_id)
+    )
+    plain_controller, plain_store = _controller(tmp_path / "plain", _tools())
+    plain = plain_controller.run(
+        LoopRequest(
+            project_path=SAMPLES / "fastapi_bad_project",
+            task_kind="REVIEW",
+            budget=RunBudget(max_steps=4, max_tool_calls=4, max_retries=0),
+        )
+    )
+    assert plain.review is not None
+    assert plain.review.release_allowed == missing.review.release_allowed
+    assert plain.review.check_results == missing.review.check_results
+    assert not any(
+        event.event_kind == "APPROVAL_REQUESTED"
+        for event in plain_store.events(plain.run_id)
+    )
+    plain_store.close()
+    missing_store.close()
+
+    manifest = relation_root / relation.manifest.index_version / "manifest.json"
+    manifest.write_bytes(manifest.read_bytes() + b" ")
+    corrupt_tool = CountingEvidence()
+    corrupt_controller, corrupt_store = _controller(
+        tmp_path / "corrupt", _tools(evidence=corrupt_tool)
+    )
+    corrupt = corrupt_controller.run(
+        LoopRequest(
+            project_path=SAMPLES / "fastapi_bad_project",
+            task_kind="REVIEW",
+            budget=RunBudget(max_steps=4, max_tool_calls=4, max_retries=3),
+            retrieval_mode="graph_hybrid",
+            relation_index_version=relation.manifest.index_version,
+            memory_project_id="project-alpha",
+            memory_version=memory.manifest.memory_version,
+            relation_budget=RelationQueryBudget(2, 24, 24, 8_000),
+            memory_budget=MemoryQueryBudget(1, 200, 30),
+        )
+    )
+    assert corrupt.status == "PAUSED"
+    assert corrupt.metrics["stop_reason"] == "artifact_integrity_failure"
+    assert corrupt_tool.calls == 0
+    corrupt_events = corrupt_store.events(corrupt.run_id)
+    corrupt_request = next(
+        event for event in corrupt_events
+        if event.event_kind == "TOOL_REQUESTED"
+        and event.payload["tool_name"] == "search_rule_evidence"
+    )
+    assert not any(
+        event.event_kind == "TOOL_STARTED"
+        and event.payload["idempotency_key"] == corrupt_request.payload["idempotency_key"]
+        for event in corrupt_events
+    )
+    assert not any(event.event_kind == "TOOL_FAILED" for event in corrupt_events)
+    corrupt_store.close()
+
+
+def _runtime_memory_record(content: str) -> ProjectMemoryRecord:
+    return ProjectMemoryRecord(
+        memory_id="memory-runtime",
+        project_id="project-alpha",
+        kind=MemoryKind.CONSTRAINT,
+        content=content,
+        provenance=MemoryProvenance(
+            run_id="run-task4",
+            event_id="event-task4",
+            evidence_id=None,
+            rule_id="RG-DEPS-001",
+            human_correction_id=None,
+        ),
+        created_at_utc="2026-08-15T00:00:00+00:00",
+        updated_at_utc="2026-08-15T00:00:00+00:00",
+        status=MemoryStatus.ACTIVE,
+        confidence=0.9,
+        supersedes=None,
+        expires_at_utc=None,
+        memory_version="pm-pending",
+    )

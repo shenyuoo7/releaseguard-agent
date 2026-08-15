@@ -16,6 +16,9 @@ from releaseguard_agent.agents.role_agents import (
 )
 from releaseguard_agent.models.check_result import CheckResult, CheckStatus, RiskLevel
 from releaseguard_agent.models.retrieval_evidence import RetrievalEvidence
+from releaseguard_agent.models.project_memory import MemoryQueryBudget
+from releaseguard_agent.models.relation_index import RelationQueryBudget
+from releaseguard_agent.observability import ArtifactContextTrace
 from releaseguard_agent.services.release_review_service import (
     ReleaseReviewArtifacts,
     ReleaseReviewResult,
@@ -78,6 +81,17 @@ class LoopRequest:
     budget: RunBudget
     force_ai_review: bool = False
     baseline_review: ReleaseReviewResult | None = None
+    retrieval_mode: str = "hybrid"
+    relation_index_version: str | None = None
+    memory_project_id: str | None = None
+    memory_version: str | None = None
+    memory_as_of_utc: str = field(default_factory=lambda: _utc_now())
+    relation_budget: RelationQueryBudget = field(
+        default_factory=lambda: RelationQueryBudget(2, 24, 24, 8_000)
+    )
+    memory_budget: MemoryQueryBudget = field(
+        default_factory=lambda: MemoryQueryBudget(3, 4_000, 1_000)
+    )
 
     def __post_init__(self) -> None:
         project_path = Path(self.project_path).expanduser().resolve()
@@ -89,6 +103,22 @@ class LoopRequest:
             raise ValueError("budget must be a RunBudget")
         if not isinstance(self.force_ai_review, bool):
             raise ValueError("force_ai_review must be boolean")
+        if self.retrieval_mode.strip().lower() not in {
+            "exact", "bm25", "vector", "hybrid", "local_graph", "graph_hybrid"
+        }:
+            raise ValueError("retrieval_mode is invalid")
+        for value, label in (
+            (self.relation_index_version, "relation_index_version"),
+            (self.memory_project_id, "memory_project_id"),
+            (self.memory_version, "memory_version"),
+        ):
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"{label} must be non-empty when supplied")
+        if not isinstance(self.relation_budget, RelationQueryBudget):
+            raise ValueError("relation_budget must be a RelationQueryBudget")
+        if not isinstance(self.memory_budget, MemoryQueryBudget):
+            raise ValueError("memory_budget must be a MemoryQueryBudget")
+        _validate_as_of_utc(self.memory_as_of_utc)
         object.__setattr__(self, "project_path", project_path)
 
 
@@ -322,6 +352,8 @@ class LoopController:
                 return self._fail_budget(state, budget_error)
             self._restore_committed_references(state, request, context)
             call = self._next_workflow_call(state, request)
+            prepared = self._registry.prepare(call, context)
+            call = prepared.call
             spec = self._registry.get(call.tool_name, call.tool_version)
             guardrail_decision = (
                 self._guardrails.check(call, spec, context)
@@ -349,11 +381,21 @@ class LoopController:
                 requested_payload["approval_paths"] = list(
                     approval_request.allowed_paths
                 )
+            artifact_context = call.args.get("artifact_context")
+            if isinstance(artifact_context, Mapping):
+                requested_payload["artifact_context"] = dict(artifact_context)
             state = self._append(
                 state,
                 "TOOL_REQUESTED",
                 requested_payload,
             )
+            if prepared.error_type is not None:
+                return self._pause_ambiguous(
+                    state,
+                    call,
+                    prepared.error_type,
+                    stop_reason=prepared.error_type,
+                )
             if approval_request is not None:
                 state = self._append(
                     state,
@@ -378,6 +420,13 @@ class LoopController:
                 "plan_digest": sha256_json(plan),
                 "force_ai_review": request.force_ai_review,
                 "baseline_review": plan["baseline_review"],
+                "retrieval_mode": plan["retrieval_mode"],
+                "relation_index_version": plan["relation_index_version"],
+                "memory_project_id": plan["memory_project_id"],
+                "memory_version": plan["memory_version"],
+                "memory_as_of_utc": plan["memory_as_of_utc"],
+                "relation_budget": plan["relation_budget"],
+                "memory_budget": plan["memory_budget"],
             },
         )
 
@@ -388,6 +437,21 @@ class LoopController:
         call: ToolCall,
         context: ToolExecutionContext,
     ) -> AgentRunResult:
+        prepared = self._registry.prepare(call, context)
+        if prepared.call.fingerprint != call.fingerprint:
+            return self._pause_ambiguous(
+                state,
+                call,
+                "artifact_context_mismatch",
+                stop_reason="artifact_context_mismatch",
+            )
+        if prepared.error_type is not None:
+            return self._pause_ambiguous(
+                state,
+                call,
+                prepared.error_type,
+                stop_reason=prepared.error_type,
+            )
         tool_result = self._store.load_tool_result(call)
         if (
             tool_result is not None
@@ -539,13 +603,17 @@ class LoopController:
             )
         _restore_review_reference(tool_result, context)
         _restore_tool_reference(call.tool_name, tool_result, context)
+        completed_payload: dict[str, object] = {
+            "idempotency_key": call.idempotency_key,
+            "output_sha256": tool_result.output_sha256 or sha256_json({}),
+        }
+        artifact_context = _artifact_context_from_tool_result(tool_result)
+        if artifact_context is not None:
+            completed_payload["artifact_context"] = artifact_context.to_dict()
         state = self._append(
             state,
             "TOOL_COMPLETED",
-            {
-                "idempotency_key": call.idempotency_key,
-                "output_sha256": tool_result.output_sha256 or sha256_json({}),
-            },
+            completed_payload,
         )
         return self._after_completed_tool(
             state,
@@ -816,9 +884,22 @@ class LoopController:
         if tool_name == "search_rule_evidence":
             args = {
                 "review_ref": review_ref,
-                "retrieval_mode": "hybrid",
+                "retrieval_mode": request.retrieval_mode,
                 "top_k": 5,
                 "minimum_evidence": 1,
+                "relation_index_version": request.relation_index_version,
+                "memory_project_id": request.memory_project_id,
+                "memory_version": request.memory_version,
+                "memory_as_of_utc": request.memory_as_of_utc,
+                "relation_budget": {
+                    "max_hops": request.relation_budget.max_hops,
+                    "max_nodes": request.relation_budget.max_nodes,
+                    "max_edges": request.relation_budget.max_edges,
+                    "max_context_characters": (
+                        request.relation_budget.max_context_characters
+                    ),
+                },
+                "memory_budget": _durable_memory_budget(request.memory_budget),
             }
         else:
             evidence_result = self._latest_completed_result(
@@ -851,7 +932,7 @@ class LoopController:
                 raise CorruptRunError(f"unknown workflow role tool: {tool_name}")
         return ToolCall.create(
             tool_name=tool_name,
-            tool_version="1",
+            tool_version=("2" if tool_name == "search_rule_evidence" else "1"),
             args=args,
             run_id=state.run_id,
             step_index=state.step_index,
@@ -1102,6 +1183,7 @@ class LoopController:
         state: AgentRunState,
         request: LoopRequest,
     ) -> None:
+        context = self._context(state)
         for reconciled in (
             event
             for event in self._store.events(state.run_id)
@@ -1125,6 +1207,14 @@ class LoopController:
             if event.event_kind == "TOOL_COMPLETED"
         ):
             call = self._call_for_completed_event(state, request, completed)
+            prepared = self._registry.prepare(call, context)
+            if (
+                prepared.call.fingerprint != call.fingerprint
+                or prepared.error_type is not None
+            ):
+                raise CorruptRunError(
+                    "completed tool artifact context does not match replay"
+                )
             tool_result = self._store.load_tool_result(call)
             if tool_result is None or tool_result.status != "completed":
                 raise CorruptRunError(
@@ -1134,6 +1224,7 @@ class LoopController:
                 raise CorruptRunError(
                     "TOOL_COMPLETED output hash does not match durable tool result"
                 )
+            _restore_tool_reference(call.tool_name, tool_result, context)
 
     def _finish_recorded_evaluation(
         self,
@@ -1209,6 +1300,21 @@ class LoopController:
             budget=state.budget,
             force_ai_review=force_ai_review,
             baseline_review=baseline_review,
+            retrieval_mode=str(request_payload.get("retrieval_mode", "hybrid"))
+            if request_payload is not None
+            else "hybrid",
+            relation_index_version=_optional_request_string(
+                request_payload, "relation_index_version"
+            ),
+            memory_project_id=_optional_request_string(
+                request_payload, "memory_project_id"
+            ),
+            memory_version=_optional_request_string(
+                request_payload, "memory_version"
+            ),
+            memory_as_of_utc=_request_as_of_utc(request_payload),
+            relation_budget=_request_relation_budget(request_payload),
+            memory_budget=_request_memory_budget(request_payload),
         )
         self._requests[state.run_id] = request
         return request
@@ -1245,6 +1351,12 @@ class LoopController:
         )
         raw_key = payload.get("idempotency_key")
         raw_approval = payload.get("approval_id")
+        raw_artifact_context = payload.get("artifact_context")
+        artifact_context = (
+            ArtifactContextTrace.from_dict(raw_artifact_context)
+            if isinstance(raw_artifact_context, Mapping)
+            else None
+        )
         if event.event_kind in {"APPROVAL_REQUESTED", "APPROVAL_DECIDED"}:
             envelope_key = (
                 "request"
@@ -1269,6 +1381,7 @@ class LoopController:
                 if event.event_kind == "CHECKPOINT_COMMITTED"
                 else None
             ),
+            artifact_context=artifact_context,
             occurred_at=event.created_at_utc,
         )
 
@@ -1460,6 +1573,20 @@ def _plan_document(request: LoopRequest) -> dict[str, object]:
             if request.baseline_review is not None
             else None
         ),
+        "retrieval_mode": request.retrieval_mode,
+        "relation_index_version": request.relation_index_version,
+        "memory_project_id": request.memory_project_id,
+        "memory_version": request.memory_version,
+        "memory_as_of_utc": request.memory_as_of_utc,
+        "relation_budget": {
+            "max_hops": request.relation_budget.max_hops,
+            "max_nodes": request.relation_budget.max_nodes,
+            "max_edges": request.relation_budget.max_edges,
+            "max_context_characters": (
+                request.relation_budget.max_context_characters
+            ),
+        },
+        "memory_budget": _durable_memory_budget(request.memory_budget),
     }
 
 
@@ -1557,9 +1684,9 @@ def _restore_tool_reference(
         )
     if tool_name == "search_rule_evidence":
         evidence_output = _evidence_output_from_result(result)
-        context.references[_output_string(result, "evidence_ref")] = (
-            evidence_output.evidence
-        )
+        evidence_ref = _output_string(result, "evidence_ref")
+        if evidence_ref not in context.references:
+            context.references[evidence_ref] = evidence_output.evidence
     elif tool_name == "analyze_risk":
         risk_output = _risk_output_from_result(result)
         context.references[_output_string(result, "risk_ref")] = risk_output
@@ -1587,6 +1714,25 @@ def _fix_plan_output_from_result(result: ToolResult) -> FixPlannerAgentOutput:
         return FixPlannerAgentOutput.from_dict(raw)
     except ValueError as exc:
         raise CorruptRunError("durable fix-plan output is invalid") from exc
+
+
+def _artifact_context_from_tool_result(
+    result: ToolResult,
+) -> ArtifactContextTrace | None:
+    if result.output is None:
+        return None
+    raw_output = result.output.get("evidence_output")
+    if not isinstance(raw_output, Mapping):
+        return None
+    raw_context = raw_output.get("artifact_context")
+    if raw_context is None:
+        return None
+    if not isinstance(raw_context, Mapping):
+        raise CorruptRunError("durable artifact_context is invalid")
+    try:
+        return ArtifactContextTrace.from_dict(raw_context)
+    except ValueError as exc:
+        raise CorruptRunError("durable artifact_context is invalid") from exc
 
 
 def _output_mapping(result: ToolResult, key: str) -> Mapping[str, object]:
@@ -1840,3 +1986,89 @@ def _latest_event(events: tuple[RunEvent, ...], event_kind: str) -> RunEvent | N
 def _existing_trace_path(store: AgentRunStore, run_id: str) -> Path | None:
     trace_path = store.root / "traces" / run_id / "execution_trace.json"
     return trace_path if trace_path.is_file() else None
+
+
+def _optional_request_string(
+    payload: Mapping[str, object] | None,
+    key: str,
+) -> str | None:
+    if payload is None or payload.get(key) is None:
+        return None
+    value = payload[key]
+    if not isinstance(value, str) or not value:
+        raise CorruptRunError(f"durable request {key} is invalid")
+    return value
+
+
+def _request_as_of_utc(payload: Mapping[str, object] | None) -> str:
+    value = (
+        payload.get("memory_as_of_utc")
+        if payload is not None
+        else None
+    )
+    if value is None:
+        return _utc_now()
+    if not isinstance(value, str):
+        raise CorruptRunError("durable memory_as_of_utc is invalid")
+    try:
+        _validate_as_of_utc(value)
+    except ValueError as exc:
+        raise CorruptRunError("durable memory_as_of_utc is invalid") from exc
+    return value
+
+
+def _validate_as_of_utc(value: object) -> None:
+    if not isinstance(value, str) or not value:
+        raise ValueError("memory_as_of_utc must be canonical UTC")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("memory_as_of_utc must be canonical UTC") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise ValueError("memory_as_of_utc must be canonical UTC")
+    canonical = parsed.isoformat()
+    if value not in {canonical, canonical.removesuffix("+00:00") + "Z"}:
+        raise ValueError("memory_as_of_utc must be canonical UTC")
+
+
+def _request_relation_budget(
+    payload: Mapping[str, object] | None,
+) -> RelationQueryBudget:
+    raw = payload.get("relation_budget") if payload is not None else None
+    if raw is None:
+        return RelationQueryBudget(2, 24, 24, 8_000)
+    if not isinstance(raw, Mapping):
+        raise CorruptRunError("durable relation_budget is invalid")
+    try:
+        return RelationQueryBudget(**dict(raw))
+    except (TypeError, ValueError) as exc:
+        raise CorruptRunError("durable relation_budget is invalid") from exc
+
+
+def _request_memory_budget(
+    payload: Mapping[str, object] | None,
+) -> MemoryQueryBudget:
+    raw = payload.get("memory_budget") if payload is not None else None
+    if raw is None:
+        return MemoryQueryBudget(3, 4_000, 1_000)
+    if not isinstance(raw, Mapping):
+        raise CorruptRunError("durable memory_budget is invalid")
+    try:
+        values = dict(raw)
+        return MemoryQueryBudget(
+            top_k=values["top_k"],
+            max_characters=values["max_characters"],
+            max_tokens=values["max_context_units"],
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CorruptRunError("durable memory_budget is invalid") from exc
+
+
+def _durable_memory_budget(budget: MemoryQueryBudget) -> dict[str, int]:
+    """Serialize a public budget without secret-like key names."""
+
+    return {
+        "top_k": budget.top_k,
+        "max_characters": budget.max_characters,
+        "max_context_units": budget.max_tokens,
+    }

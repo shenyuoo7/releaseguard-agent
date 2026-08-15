@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Any
@@ -10,8 +10,9 @@ from releaseguard_agent.agents.release_risk_analysis_agent import (
 )
 from releaseguard_agent.llm import LLMRuntime, OpenAIClientRequestError
 from releaseguard_agent.models.retrieval_evidence import RelationPath, RetrievalEvidence
-from releaseguard_agent.models.relation_index import RelationQueryBudget
-from releaseguard_agent.observability import ExecutionTracer
+from releaseguard_agent.models.project_memory import MemoryContext, MemoryQueryBudget
+from releaseguard_agent.models.relation_index import RelationQueryBudget, RelationSnapshot
+from releaseguard_agent.observability import ArtifactContextTrace, ExecutionTracer
 from releaseguard_agent.rag import (
     RetrievalResult,
     RuleRetrievalService,
@@ -22,9 +23,19 @@ from releaseguard_agent.services.release_review_service import (
     ReleaseReviewService,
     build_agent_advice_result,
 )
+from releaseguard_agent.rag.project_memory import (
+    ProjectMemoryIntegrityError,
+    ProjectMemoryStore,
+    select_memory_context,
+)
+from releaseguard_agent.rag.relation_index import (
+    RelationIndexIntegrityError,
+    RelationIndexStore,
+)
 
 if TYPE_CHECKING:
     from releaseguard_agent.runtime import ToolExecutionContext, ToolRegistry
+    from releaseguard_agent.runtime.tools import ToolPreparationResult
 
 
 class ScanProjectTool:
@@ -57,11 +68,221 @@ class ScanProjectTool:
             return result
 
 
+@dataclass(frozen=True)
+class ArtifactContextRequest:
+    """Explicit immutable artifact selection bound into a durable tool call."""
+
+    project_id: str | None
+    query: str
+    active_run_references: tuple[str, ...]
+    retrieval_mode: str
+    relation_index_version: str | None
+    memory_version: str | None
+    relation_budget: RelationQueryBudget
+    memory_budget: MemoryQueryBudget
+    memory_as_of_utc: str
+
+
+@dataclass(frozen=True)
+class ResolvedArtifactContext:
+    """Safe trace identity plus process-local bounded memory content."""
+
+    trace: ArtifactContextTrace
+    memory_context: MemoryContext | None = field(repr=False)
+    relation_snapshot: RelationSnapshot | None = field(repr=False)
+
+
+class ArtifactContextIntegrityError(ValueError):
+    """Raised when a requested immutable artifact cannot be trusted."""
+
+    def __init__(self, trace: ArtifactContextTrace) -> None:
+        super().__init__("artifact integrity verification failed")
+        self.trace = trace
+
+
 class EvidenceSearchTool:
     """Agent-callable wrapper around the reachable rule retrieval service."""
 
-    def __init__(self, service: RuleRetrievalService) -> None:
+    def __init__(
+        self,
+        service: RuleRetrievalService,
+        *,
+        relation_snapshot_root: Path | None = None,
+        memory_root: Path | None = None,
+    ) -> None:
         self._service = service
+        self._relation_store = (
+            RelationIndexStore(relation_snapshot_root)
+            if relation_snapshot_root is not None
+            else None
+        )
+        self._memory_store = (
+            ProjectMemoryStore(memory_root) if memory_root is not None else None
+        )
+
+    def resolve_artifact_context(
+        self,
+        request: ArtifactContextRequest,
+    ) -> ResolvedArtifactContext:
+        """Verify exact source versions and select memory without building caches."""
+
+        relation_budget = tuple(sorted({
+            "max_hops": request.relation_budget.max_hops,
+            "max_nodes": request.relation_budget.max_nodes,
+            "max_edges": request.relation_budget.max_edges,
+            "max_context_characters": request.relation_budget.max_context_characters,
+        }.items()))
+        memory_budget = tuple(sorted({
+            "top_k": request.memory_budget.top_k,
+            "max_characters": request.memory_budget.max_characters,
+            "max_estimated_units": request.memory_budget.max_tokens,
+        }.items()))
+        trace = ArtifactContextTrace(
+            relation_index_version=request.relation_index_version,
+            relation_mode="text_only",
+            relation_budget=relation_budget,
+            memory_version=request.memory_version,
+            memory_mode="not_requested",
+            memory_budget=memory_budget,
+        )
+        normalized_mode = request.retrieval_mode.strip().lower()
+        relation_snapshot: RelationSnapshot | None = None
+        if normalized_mode in {"local_graph", "graph_hybrid"}:
+            if request.relation_index_version is None:
+                trace = replace(
+                    trace,
+                    relation_fallback_reason="relation_snapshot_not_requested",
+                )
+            elif self._relation_store is None:
+                trace = replace(
+                    trace,
+                    relation_fallback_reason="relation_snapshot_unconfigured",
+                )
+            else:
+                try:
+                    relation_snapshot = self._relation_store.load(
+                        request.relation_index_version
+                    )
+                except RelationIndexIntegrityError as exc:
+                    if "unavailable" in str(exc).lower():
+                        trace = replace(
+                            trace,
+                            relation_fallback_reason="relation_snapshot_missing",
+                        )
+                    else:
+                        raise ArtifactContextIntegrityError(
+                            replace(
+                                trace,
+                                relation_fallback_reason=(
+                                    "relation_snapshot_integrity_failure"
+                                ),
+                            )
+                        ) from exc
+                else:
+                    trace = replace(
+                        trace,
+                        relation_sha256=relation_snapshot.snapshot_sha256,
+                        relation_mode=normalized_mode,
+                    )
+        elif request.relation_index_version is not None:
+            trace = replace(
+                trace,
+                relation_fallback_reason="relation_mode_text_only",
+            )
+
+        memory_context: MemoryContext | None = None
+        if request.memory_version is None:
+            trace = replace(
+                trace,
+                memory_fallback_reason="memory_not_requested",
+            )
+        elif request.project_id is None:
+            trace = replace(
+                trace,
+                memory_mode="evidence_gap",
+                memory_fallback_reason="memory_project_id_required",
+            )
+        elif self._memory_store is None:
+            trace = replace(
+                trace,
+                memory_mode="evidence_gap",
+                memory_fallback_reason="memory_snapshot_unconfigured",
+            )
+        else:
+            try:
+                memory_snapshot = self._memory_store.load(
+                    request.project_id, request.memory_version
+                )
+            except ProjectMemoryIntegrityError as exc:
+                message = str(exc).lower()
+                if "unavailable" in message:
+                    trace = replace(
+                        trace,
+                        memory_mode="evidence_gap",
+                        memory_fallback_reason="memory_snapshot_missing",
+                    )
+                elif "project or version does not match" in message:
+                    trace = replace(
+                        trace,
+                        memory_mode="evidence_gap",
+                        memory_fallback_reason="memory_project_scope_mismatch",
+                    )
+                else:
+                    raise ArtifactContextIntegrityError(
+                        replace(
+                            trace,
+                            memory_mode="integrity_failure",
+                            memory_fallback_reason="memory_snapshot_integrity_failure",
+                        )
+                    ) from exc
+            else:
+                memory_context = select_memory_context(
+                    memory_snapshot,
+                    project_id=request.project_id,
+                    query=request.query,
+                    active_run_references=request.active_run_references,
+                    budget=request.memory_budget,
+                    as_of_utc=request.memory_as_of_utc,
+                )
+                selected_ids = tuple(
+                    sorted(item.memory_id for item in memory_context.selected)
+                )
+                omitted = tuple(sorted(
+                    (
+                        item.memory_id,
+                        item.exclusion_reason or "not_selected",
+                    )
+                    for item in memory_context.omitted
+                ))
+                fallback = None
+                mode = "selected"
+                if not selected_ids:
+                    mode = "evidence_gap"
+                    fallback = (
+                        "memory_budget_exhausted"
+                        if any(
+                            reason.endswith("_budget")
+                            for _, reason in omitted
+                        )
+                        else "memory_no_active_records"
+                    )
+                trace = replace(
+                    trace,
+                    memory_sha256=memory_snapshot.manifest.content_sha256,
+                    memory_mode=mode,
+                    memory_fallback_reason=fallback,
+                    selected_memory_ids=selected_ids,
+                    omitted_memory=omitted,
+                    memory_budget_usage=tuple(sorted({
+                        "characters": memory_context.character_count,
+                        "estimated_units": memory_context.token_count,
+                    }.items())),
+                )
+        return ResolvedArtifactContext(
+            trace=trace,
+            memory_context=memory_context,
+            relation_snapshot=relation_snapshot,
+        )
 
     def invoke(
         self,
@@ -72,6 +293,8 @@ class EvidenceSearchTool:
         seed_rule_ids: tuple[str, ...] | None = None,
         relation_index_version: str | None = None,
         relation_budget: RelationQueryBudget | None = None,
+        relation_snapshot: RelationSnapshot | None = None,
+        relation_fallback_reason: str | None = None,
         tracer: ExecutionTracer | None = None,
     ) -> RetrievalResult:
         _validate_relation_inputs(relation_index_version, relation_budget)
@@ -83,6 +306,8 @@ class EvidenceSearchTool:
                 seed_rule_ids=seed_rule_ids,
                 relation_index_version=relation_index_version,
                 relation_budget=relation_budget,
+                relation_snapshot=relation_snapshot,
+                relation_fallback_reason=relation_fallback_reason,
             )
         with tracer.span("retrieval", tool="search_rule_evidence") as span:
             result = self._service.retrieve(
@@ -92,6 +317,8 @@ class EvidenceSearchTool:
                 seed_rule_ids=seed_rule_ids,
                 relation_index_version=relation_index_version,
                 relation_budget=relation_budget,
+                relation_snapshot=relation_snapshot,
+                relation_fallback_reason=relation_fallback_reason,
             )
             span.update(
                 retrieval_method=result.mode_used,
@@ -371,6 +598,41 @@ def build_release_tool_registry(
     )
     registry.register(
         ToolSpec(
+            name="search_rule_evidence",
+            version="2",
+            input_schema={
+                "review_ref": str,
+                "retrieval_mode": str,
+                "top_k": int,
+                "minimum_evidence": int,
+                "relation_index_version": (str, type(None)),
+                "memory_project_id": (str, type(None)),
+                "memory_version": (str, type(None)),
+                "relation_budget": dict,
+                "memory_budget": dict,
+                "memory_as_of_utc": str,
+                "artifact_context": dict,
+                "artifact_context_ref": str,
+            },
+            output_schema={
+                "evidence_ref": str,
+                "evidence_output": dict,
+            },
+            side_effect="read_only",
+            allowed_roots=(),
+            network_policy="offline",
+            timeout_ms=10_000,
+            max_retries=0,
+            budget_cost=1,
+            required_approval_scope=None,
+        ),
+        lambda args, context: _runtime_evidence(workflow_tools.evidence, args, context),
+        preparer=lambda args, context: _prepare_runtime_evidence(
+            workflow_tools.evidence, args, context
+        ),
+    )
+    registry.register(
+        ToolSpec(
             name="analyze_risk",
             version="1",
             input_schema={"review_ref": str, "evidence_ref": str},
@@ -450,18 +712,192 @@ def _runtime_evidence(
     review = context.references.get(args["review_ref"])
     if not isinstance(review, ReleaseReviewResult):
         raise ValueError("unknown review reference")
+    relation_budget = _relation_budget_from_args(args)
+    memory_budget = _memory_budget_from_args(args)
+    raw_artifact_context = args.get("artifact_context")
+    artifact_context = (
+        ArtifactContextTrace.from_dict(raw_artifact_context)
+        if isinstance(raw_artifact_context, dict)
+        else None
+    )
+    raw_context_ref = args.get("artifact_context_ref")
+    resolved_context = (
+        context.references.get(raw_context_ref)
+        if isinstance(raw_context_ref, str)
+        else None
+    )
+    if resolved_context is not None and not isinstance(
+        resolved_context, ResolvedArtifactContext
+    ):
+        raise ValueError("artifact context reference is invalid")
+    memory_context = (
+        resolved_context.memory_context if resolved_context is not None else None
+    )
+    relation_snapshot = (
+        resolved_context.relation_snapshot if resolved_context is not None else None
+    )
+    if (
+        artifact_context is not None
+        and artifact_context.selected_memory_ids
+        and memory_context is None
+    ):
+        raise ValueError("selected memory context is unavailable")
     output = EvidenceAgent(tool).run(
         EvidenceAgentInput(
             review=review,
             retrieval_mode=args["retrieval_mode"],
             top_k=args["top_k"],
             minimum_evidence=args["minimum_evidence"],
+            relation_index_version=args.get("relation_index_version"),
+            relation_budget=relation_budget,
+            relation_snapshot=relation_snapshot,
+            memory_context=memory_context,
+            memory_budget=memory_budget,
+            artifact_context=artifact_context,
         )
     )
-    payload = output.to_dict()
+    payload = output.to_durable_dict()
     evidence_ref = f"evidence:{_runtime_digest(payload)}"
     context.references[evidence_ref] = output.evidence
     return {"evidence_ref": evidence_ref, "evidence_output": payload}
+
+
+def _prepare_runtime_evidence(
+    tool: EvidenceSearchTool,
+    args: dict[str, Any],
+    context: "ToolExecutionContext",
+) -> "ToolPreparationResult":
+    from releaseguard_agent.agents.role_agents import evidence_query
+    from releaseguard_agent.runtime.tools import ToolPreparationResult
+
+    review = context.references.get(args["review_ref"])
+    if not isinstance(review, ReleaseReviewResult):
+        raise ValueError("unknown review reference")
+    relation_budget = _relation_budget_from_args(args)
+    memory_budget = _memory_budget_from_args(args)
+    if relation_budget is None or memory_budget is None:
+        raise ValueError("artifact budgets are required")
+    query, _, relevant_rule_ids = evidence_query(review)
+    try:
+        resolved = tool.resolve_artifact_context(
+            ArtifactContextRequest(
+                project_id=args.get("memory_project_id"),
+                query=query,
+                active_run_references=tuple(sorted({
+                    args["review_ref"], *relevant_rule_ids
+                })),
+                retrieval_mode=args["retrieval_mode"],
+                relation_index_version=args.get("relation_index_version"),
+                memory_version=args.get("memory_version"),
+                relation_budget=relation_budget,
+                memory_budget=memory_budget,
+                memory_as_of_utc=args["memory_as_of_utc"],
+            )
+        )
+    except ArtifactContextIntegrityError as exc:
+        return ToolPreparationResult(
+            arguments=_prepared_evidence_arguments(
+                args,
+                exc.trace,
+                artifact_context_ref=(
+                    f"artifact-context:{_runtime_digest(exc.trace.to_dict())}"
+                ),
+            ),
+            error_type="artifact_integrity_failure",
+        )
+    context_ref = f"artifact-context:{_runtime_digest(resolved.trace.to_dict())}"
+    prepared_args = _prepared_evidence_arguments(
+        args, resolved.trace, artifact_context_ref=context_ref
+    )
+    raw_recorded = args.get("artifact_context")
+    recorded_ref = args.get("artifact_context_ref")
+    if raw_recorded is not None and (
+        raw_recorded != resolved.trace.to_dict() or recorded_ref != context_ref
+    ):
+        return ToolPreparationResult(
+            arguments=dict(args),
+            error_type="artifact_context_mismatch",
+        )
+    references = (
+        {context_ref: resolved}
+        if resolved.memory_context is not None or resolved.relation_snapshot is not None
+        else {}
+    )
+    return ToolPreparationResult(arguments=prepared_args, references=references)
+
+
+def _prepared_evidence_arguments(
+    args: dict[str, Any],
+    trace: ArtifactContextTrace,
+    *,
+    artifact_context_ref: str,
+) -> dict[str, Any]:
+    return {
+        "review_ref": args["review_ref"],
+        "retrieval_mode": args["retrieval_mode"],
+        "top_k": args["top_k"],
+        "minimum_evidence": args["minimum_evidence"],
+        "relation_index_version": args.get("relation_index_version"),
+        "memory_project_id": args.get("memory_project_id"),
+        "memory_version": args.get("memory_version"),
+        "relation_budget": _required_relation_budget(args),
+        "memory_budget": _required_memory_budget(args),
+        "memory_as_of_utc": args["memory_as_of_utc"],
+        "artifact_context": trace.to_dict(),
+        "artifact_context_ref": artifact_context_ref,
+    }
+
+
+def _relation_budget_from_args(args: dict[str, Any]) -> RelationQueryBudget | None:
+    raw = args.get("relation_budget")
+    if raw is None:
+        return None
+    if isinstance(raw, RelationQueryBudget):
+        return raw
+    if not isinstance(raw, dict):
+        raise ValueError("relation_budget is invalid")
+    return RelationQueryBudget(**raw)
+
+
+def _memory_budget_from_args(args: dict[str, Any]) -> MemoryQueryBudget | None:
+    raw = args.get("memory_budget")
+    if raw is None:
+        return None
+    if isinstance(raw, MemoryQueryBudget):
+        return raw
+    if not isinstance(raw, dict):
+        raise ValueError("memory_budget is invalid")
+    try:
+        return MemoryQueryBudget(
+            top_k=raw["top_k"],
+            max_characters=raw["max_characters"],
+            max_tokens=raw["max_context_units"],
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("memory_budget is invalid") from exc
+
+
+def _required_relation_budget(args: dict[str, Any]) -> dict[str, int]:
+    budget = _relation_budget_from_args(args)
+    if budget is None:
+        raise ValueError("relation_budget is required")
+    return {
+        "max_hops": budget.max_hops,
+        "max_nodes": budget.max_nodes,
+        "max_edges": budget.max_edges,
+        "max_context_characters": budget.max_context_characters,
+    }
+
+
+def _required_memory_budget(args: dict[str, Any]) -> dict[str, int]:
+    budget = _memory_budget_from_args(args)
+    if budget is None:
+        raise ValueError("memory_budget is required")
+    return {
+        "top_k": budget.top_k,
+        "max_characters": budget.max_characters,
+        "max_context_units": budget.max_tokens,
+    }
 
 
 def _runtime_risk(

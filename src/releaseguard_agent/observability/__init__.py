@@ -6,6 +6,7 @@ from releaseguard_agent.observability.trace_writer import (
     write_trace_artifact,
 )
 from releaseguard_agent.observability.execution_trace import (
+    ArtifactContextTrace,
     EXECUTION_TRACE_SCHEMA_VERSION,
     ExecutionTraceArtifacts,
     ExecutionTracer,
@@ -17,6 +18,7 @@ __all__ = [
     "TRACE_FILE_NAME",
     "TRACE_SCHEMA_VERSION",
     "EXECUTION_TRACE_SCHEMA_VERSION",
+    "ArtifactContextTrace",
     "ExecutionTraceArtifacts",
     "ExecutionTracer",
     "TraceArtifacts",

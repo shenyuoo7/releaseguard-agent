@@ -55,7 +55,17 @@ _PAYLOAD_SCHEMAS = {
     "RUN_CREATED": ({"state"}, {"request"}),
     "PLAN_PROPOSED": (
         {"plan_digest"},
-        {"force_ai_review", "baseline_review"},
+        {
+            "force_ai_review",
+            "baseline_review",
+            "retrieval_mode",
+            "relation_index_version",
+            "memory_project_id",
+            "memory_version",
+            "memory_as_of_utc",
+            "relation_budget",
+            "memory_budget",
+        },
     ),
     "TOOL_REQUESTED": (
         {"tool_name", "idempotency_key"},
@@ -68,6 +78,7 @@ _PAYLOAD_SCHEMAS = {
             "approval_id",
             "approval_scope",
             "approval_paths",
+            "artifact_context",
         },
     ),
     "APPROVAL_REQUESTED": ({"request"}, set()),
@@ -80,7 +91,10 @@ _PAYLOAD_SCHEMAS = {
         {"idempotency_key", "result_digest"},
         set(),
     ),
-    "TOOL_COMPLETED": ({"idempotency_key", "output_sha256"}, set()),
+    "TOOL_COMPLETED": (
+        {"idempotency_key", "output_sha256"},
+        {"artifact_context"},
+    ),
     "TOOL_FAILED": (
         {"idempotency_key"},
         {"retryable", "error_type", "failure_phase"},
@@ -168,6 +182,10 @@ def _plan_proposed(state: AgentRunState, payload: Mapping[str, Any]) -> AgentRun
     baseline_review = payload.get("baseline_review")
     if baseline_review is not None and not isinstance(baseline_review, Mapping):
         raise InvalidTransitionError("baseline_review must be an object")
+    for key in ("relation_budget", "memory_budget"):
+        value = payload.get(key)
+        if value is not None and not isinstance(value, Mapping):
+            raise InvalidTransitionError(f"{key} must be an object")
     _phase(state, {"CREATED"}, "PLAN_PROPOSED")
     return replace(
         state,
@@ -251,6 +269,7 @@ def _tool_requested(state: AgentRunState, payload: Mapping[str, Any]) -> AgentRu
         args_sha256 = payload.get("args_sha256")
         allowed_paths = ()
     _validate_durable_tool_call(payload)
+    _validate_artifact_context(payload.get("artifact_context"))
     requested_step = payload.get("step_index")
     if requested_step is not None and (
         isinstance(requested_step, bool)
@@ -429,6 +448,7 @@ def _tool_completed(state: AgentRunState, payload: Mapping[str, Any]) -> AgentRu
         raise InvalidTransitionError("tool must be started before completion")
     _phase(state, {"TOOL_STARTED", "RECOVERING"}, "TOOL_COMPLETED")
     _string(payload, "output_sha256")
+    _validate_artifact_context(payload.get("artifact_context"))
     return replace(
         state,
         status="RUNNING",
@@ -574,7 +594,11 @@ def _checkpoint_committed(state: AgentRunState, payload: Mapping[str, Any]) -> A
 
 def _run_paused(state: AgentRunState, payload: Mapping[str, Any]) -> AgentRunState:
     _status(state, {"RUNNING", "RECOVERING"}, "RUN_PAUSED")
-    _phase(state, {"APPROVAL_GRANTED", "TOOL_STARTED", "RECOVERING"}, "RUN_PAUSED")
+    _phase(
+        state,
+        {"TOOL_REQUESTED", "APPROVAL_GRANTED", "TOOL_STARTED", "RECOVERING"},
+        "RUN_PAUSED",
+    )
     _matching_key(state, payload, "RUN_PAUSED")
     _string(payload, "reason")
     return replace(state, status="PAUSED", lifecycle_phase="PAUSED")
@@ -742,3 +766,16 @@ def _validated_payload(event_kind: str, payload: Mapping[str, Any]) -> Mapping[s
     if missing:
         raise InvalidTransitionError(f"missing payload fields: {sorted(missing)}")
     return payload
+
+
+def _validate_artifact_context(value: object) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        raise InvalidTransitionError("artifact_context must be an object")
+    from releaseguard_agent.observability import ArtifactContextTrace
+
+    try:
+        ArtifactContextTrace.from_dict(value)
+    except ValueError as exc:
+        raise InvalidTransitionError("artifact_context is invalid") from exc

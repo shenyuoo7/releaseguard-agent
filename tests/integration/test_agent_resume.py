@@ -16,7 +16,17 @@ from releaseguard_agent.agent_tools import (
     build_release_tool_registry,
 )
 from releaseguard_agent.observability import ExecutionTracer
+from releaseguard_agent.models.project_memory import (
+    MemoryKind,
+    MemoryProvenance,
+    MemoryQueryBudget,
+    MemoryStatus,
+    ProjectMemoryRecord,
+)
+from releaseguard_agent.models.relation_index import RelationQueryBudget
 from releaseguard_agent.rag import RuleRetrievalService, get_default_rule_index_path
+from releaseguard_agent.rag.project_memory import ProjectMemoryStore
+from releaseguard_agent.rag.relation_index import RelationIndexBuilder
 from releaseguard_agent.runtime.loop import LoopController, LoopRequest
 from releaseguard_agent.runtime.models import (
     AgentRunState,
@@ -1029,6 +1039,165 @@ def test_terminal_blocking_role_results_replay_without_any_handler(
     ) == (0, 0, 0, 0)
     assert len(replay_store.events(completed.run_id)) == event_count
     replay_store.close()
+
+
+def test_terminal_artifact_replay_pins_recorded_versions_and_trace_identity(
+    tmp_path: Path,
+) -> None:
+    """A newer memory version must not replace the completed call's pinned source."""
+
+    artifact_root = PROJECT_ROOT / ".runtime" / "task4-resume" / hashlib.sha256(
+        str(tmp_path).encode("utf-8")
+    ).hexdigest()[:16]
+    relation_root = artifact_root / "relations"
+    memory_root = artifact_root / "memory"
+    relation = RelationIndexBuilder().build(
+        get_default_rule_index_path(), relation_root
+    )
+    memory_store = ProjectMemoryStore(memory_root)
+    original_memory = memory_store.publish(
+        "project-alpha",
+        (
+            _resume_memory_record(
+                "memory-old",
+                "Old pinned fact.",
+                expires_at_utc="2020-01-01T00:00:00+00:00",
+            ),
+        ),
+    )
+    retrieval = RuleRetrievalService(
+        get_default_rule_index_path(), relation_snapshot_root=relation_root
+    )
+
+    class CountingEvidence(EvidenceSearchTool):
+        def __init__(self) -> None:
+            super().__init__(
+                retrieval,
+                relation_snapshot_root=relation_root,
+                memory_root=memory_root,
+            )
+            self.calls = 0
+
+        def invoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return super().invoke(*args, **kwargs)
+
+    initial_evidence = CountingEvidence()
+    root = tmp_path / "artifact-terminal"
+    controller, store = _components(
+        root,
+        CountingScanTool(),
+        allowed_roots=(BLOCKING_SAMPLE,),
+        evidence=initial_evidence,
+    )
+    completed = controller.run(
+        LoopRequest(
+            project_path=BLOCKING_SAMPLE,
+            task_kind="REVIEW",
+            budget=RunBudget(max_steps=4, max_tool_calls=4, max_retries=0),
+            retrieval_mode="graph_hybrid",
+            relation_index_version=relation.manifest.index_version,
+            memory_project_id="project-alpha",
+            memory_version=original_memory.manifest.memory_version,
+            relation_budget=RelationQueryBudget(2, 24, 24, 8_000),
+                memory_budget=MemoryQueryBudget(1, 100, 20),
+                memory_as_of_utc="2019-01-01T00:00:00+00:00",
+        )
+    )
+    assert completed.status == "COMPLETED"
+    assert initial_evidence.calls >= 1
+    assert completed.trace_path is not None
+    trace_hash = hashlib.sha256(completed.trace_path.read_bytes()).hexdigest()
+    event_count = len(store.events(completed.run_id))
+    recorded_request = next(
+        event for event in store.events(completed.run_id)
+        if event.event_kind == "TOOL_REQUESTED"
+        and event.payload["tool_name"] == "search_rule_evidence"
+    )
+    recorded_args = json.loads(str(recorded_request.payload["canonical_args"]))
+    assert recorded_args["artifact_context"]["selected_memory_ids"] == [
+        "memory-old"
+    ]
+    recorded_completion = next(
+        event for event in store.events(completed.run_id)
+        if event.event_kind == "TOOL_COMPLETED"
+        and event.payload["idempotency_key"]
+        == recorded_request.payload["idempotency_key"]
+    )
+    assert (
+        recorded_completion.payload["artifact_context"][
+            "relation_fallback_reason"
+        ]
+        == "relation_edge_budget_exceeded"
+    )
+    store.close()
+
+    newer_memory = memory_store.publish(
+        "project-alpha",
+        (
+            replace(
+                original_memory.records[0],
+                memory_version="pm-pending",
+            ),
+            _resume_memory_record("memory-new", "New latest fact."),
+        ),
+        parent_memory_version=original_memory.manifest.memory_version,
+    )
+    assert newer_memory.manifest.memory_version != original_memory.manifest.memory_version
+
+    replay_evidence = CountingEvidence()
+    replay, replay_store = _components(
+        root,
+        CountingScanTool(),
+        allowed_roots=(BLOCKING_SAMPLE,),
+        evidence=replay_evidence,
+    )
+    materialized = replay.resume(completed.run_id)
+
+    assert materialized.status == "COMPLETED"
+    assert replay_evidence.calls == 0
+    assert len(replay_store.events(completed.run_id)) == event_count
+    assert materialized.trace_path is not None
+    assert hashlib.sha256(materialized.trace_path.read_bytes()).hexdigest() == trace_hash
+    replay_request = next(
+        event for event in replay_store.events(completed.run_id)
+        if event.event_kind == "TOOL_REQUESTED"
+        and event.payload["tool_name"] == "search_rule_evidence"
+    )
+    replay_args = json.loads(str(replay_request.payload["canonical_args"]))
+    assert replay_args == recorded_args
+    assert replay_args["memory_version"] == original_memory.manifest.memory_version
+    assert replay_args["memory_version"] != newer_memory.manifest.memory_version
+    assert replay_args["memory_as_of_utc"] == "2019-01-01T00:00:00+00:00"
+    replay_store.close()
+
+
+def _resume_memory_record(
+    memory_id: str,
+    content: str,
+    *,
+    expires_at_utc: str | None = None,
+) -> ProjectMemoryRecord:
+    return ProjectMemoryRecord(
+        memory_id=memory_id,
+        project_id="project-alpha",
+        kind=MemoryKind.PROJECT_FACT,
+        content=content,
+        provenance=MemoryProvenance(
+            run_id="run-task4",
+            event_id="event-task4",
+            evidence_id=None,
+            rule_id="RG-DEPS-001",
+            human_correction_id=None,
+        ),
+        created_at_utc="2026-08-15T00:00:00+00:00",
+        updated_at_utc="2026-08-15T00:00:00+00:00",
+        status=MemoryStatus.ACTIVE,
+        confidence=0.9,
+        supersedes=None,
+        expires_at_utc=expires_at_utc,
+        memory_version="pm-pending",
+    )
 
 
 def test_restart_after_tool_failed_checkpoints_before_real_retry(

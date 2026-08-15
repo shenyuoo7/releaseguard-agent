@@ -25,9 +25,6 @@ from releaseguard_agent.models.project_memory import (
     ProjectMemoryRecord,
     validate_project_memory_record_for_persistence,
 )
-from releaseguard_agent.runtime.tools import reject_sensitive_tool_arguments
-
-
 _SCHEMA_VERSION = "1"
 _RUNTIME_ROOT = Path(__file__).resolve().parents[3] / ".runtime"
 
@@ -65,7 +62,7 @@ class ProjectMemoryStore:
         """Publish a new immutable source version, retaining deletion tombstones."""
 
         _nonempty(project_id, "project_id")
-        reject_sensitive_tool_arguments({"project_id": project_id})
+        _reject_sensitive_tool_arguments({"project_id": project_id})
         parent = (
             None
             if parent_memory_version is None
@@ -345,57 +342,115 @@ class MemoryContextAssembler:
         active_run_references: Iterable[str],
         budget: MemoryQueryBudget,
     ) -> MemoryContext:
-        references = tuple(active_run_references)
-        reject_sensitive_tool_arguments(
-            {"query": query, "active_run_references": list(references)}
-        )
         records = self._index.records(project_id, memory_version)
-        active_references = frozenset(references)
-        ranked = sorted(
-            ((_score(record, query, active_references), record) for record in records),
-            key=lambda item: (-item[0], item[1].memory_id),
-        )
-        selected: list[MemoryContextSelection] = []
-        omitted: list[MemoryContextSelection] = []
-        accepted_content: set[str] = set()
-        content_parts: list[str] = []
-        character_count = 0
-        token_count = 0
-        now = datetime.now(UTC)
-        for score, record in ranked:
-            exclusion = _exclusion_reason(record, now)
-            if exclusion is not None:
-                omitted.append(MemoryContextSelection(record.memory_id, score, None, exclusion))
-                continue
-            canonical_content = record.content.casefold()
-            if canonical_content in accepted_content:
-                omitted.append(MemoryContextSelection(record.memory_id, score, None, "duplicate_content"))
-                continue
-            additional_characters = len(record.content) + (2 if content_parts else 0)
-            additional_tokens = len(record.content.split())
-            if len(selected) >= budget.top_k:
-                reason = "top_k_budget"
-            elif character_count + additional_characters > budget.max_characters:
-                reason = "character_budget"
-            elif token_count + additional_tokens > budget.max_tokens:
-                reason = "token_budget"
-            else:
-                accepted_content.add(canonical_content)
-                content_parts.append(record.content)
-                character_count += additional_characters
-                token_count += additional_tokens
-                selected.append(MemoryContextSelection(record.memory_id, score, "ranked_relevant", None))
-                continue
-            omitted.append(MemoryContextSelection(record.memory_id, score, None, reason))
-        return MemoryContext(
+        return _select_memory_context(
             project_id=project_id,
             memory_version=memory_version,
-            selected=tuple(selected),
-            omitted=tuple(omitted),
-            content="\n\n".join(content_parts),
-            character_count=character_count,
-            token_count=token_count,
+            records=records,
+            query=query,
+            active_run_references=active_run_references,
+            budget=budget,
         )
+
+
+def select_memory_context(
+    snapshot: ProjectMemorySnapshot,
+    *,
+    project_id: str,
+    query: str,
+    active_run_references: Iterable[str],
+    budget: MemoryQueryBudget,
+    as_of_utc: str | None = None,
+) -> MemoryContext:
+    """Select bounded context directly from verified source without a cache write."""
+
+    if snapshot.manifest.project_id != project_id:
+        raise ProjectMemoryIntegrityError("memory project does not match context scope")
+    return _select_memory_context(
+        project_id=project_id,
+        memory_version=snapshot.manifest.memory_version,
+        records=snapshot.records,
+        query=query,
+        active_run_references=active_run_references,
+        budget=budget,
+        as_of_utc=as_of_utc,
+    )
+
+
+def _select_memory_context(
+    *,
+    project_id: str,
+    memory_version: str,
+    records: tuple[ProjectMemoryRecord, ...],
+    query: str,
+    active_run_references: Iterable[str],
+    budget: MemoryQueryBudget,
+    as_of_utc: str | None = None,
+) -> MemoryContext:
+    references = tuple(active_run_references)
+    _reject_sensitive_tool_arguments(
+        {"query": query, "active_run_references": list(references)}
+    )
+    active_references = frozenset(references)
+    ranked = sorted(
+        ((_score(record, query, active_references), record) for record in records),
+        key=lambda item: (-item[0], item[1].memory_id),
+    )
+    selected: list[MemoryContextSelection] = []
+    omitted: list[MemoryContextSelection] = []
+    accepted_content: set[str] = set()
+    content_parts: list[str] = []
+    character_count = 0
+    token_count = 0
+    now = (
+        datetime.now(UTC)
+        if as_of_utc is None
+        else _canonical_as_of_utc(as_of_utc)
+    )
+    for score, record in ranked:
+        exclusion = _exclusion_reason(record, now)
+        if exclusion is not None:
+            omitted.append(
+                MemoryContextSelection(record.memory_id, score, None, exclusion)
+            )
+            continue
+        canonical_content = record.content.casefold()
+        if canonical_content in accepted_content:
+            omitted.append(
+                MemoryContextSelection(
+                    record.memory_id, score, None, "duplicate_content"
+                )
+            )
+            continue
+        additional_characters = len(record.content) + (2 if content_parts else 0)
+        additional_tokens = len(record.content.split())
+        if len(selected) >= budget.top_k:
+            reason = "top_k_budget"
+        elif character_count + additional_characters > budget.max_characters:
+            reason = "character_budget"
+        elif token_count + additional_tokens > budget.max_tokens:
+            reason = "token_budget"
+        else:
+            accepted_content.add(canonical_content)
+            content_parts.append(record.content)
+            character_count += additional_characters
+            token_count += additional_tokens
+            selected.append(
+                MemoryContextSelection(
+                    record.memory_id, score, "ranked_relevant", None
+                )
+            )
+            continue
+        omitted.append(MemoryContextSelection(record.memory_id, score, None, reason))
+    return MemoryContext(
+        project_id=project_id,
+        memory_version=memory_version,
+        selected=tuple(selected),
+        omitted=tuple(omitted),
+        content="\n\n".join(content_parts),
+        character_count=character_count,
+        token_count=token_count,
+    )
 
 
 def _prepare_records(
@@ -737,6 +792,21 @@ def _exclusion_reason(record: ProjectMemoryRecord, now: datetime) -> str | None:
     return None
 
 
+def _canonical_as_of_utc(value: object) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise ValueError("as_of_utc must be canonical UTC")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("as_of_utc must be canonical UTC") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(None):
+        raise ValueError("as_of_utc must be canonical UTC")
+    canonical = parsed.isoformat()
+    if value not in {canonical, canonical.removesuffix("+00:00") + "Z"}:
+        raise ValueError("as_of_utc must be canonical UTC")
+    return parsed
+
+
 def _score(record: ProjectMemoryRecord, query: str, references: frozenset[str]) -> float:
     provenance_values = frozenset(value for value in record.provenance.to_dict().values() if value)
     active_matches = len(provenance_values & references)
@@ -805,3 +875,11 @@ def _is_sha256(value: object) -> bool:
 def _nonempty(value: object, name: str) -> None:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a non-empty string")
+
+
+def _reject_sensitive_tool_arguments(value: object) -> None:
+    """Keep immutable-memory imports independent from runtime package exports."""
+
+    from releaseguard_agent.runtime.tools import reject_sensitive_tool_arguments
+
+    reject_sensitive_tool_arguments(value)

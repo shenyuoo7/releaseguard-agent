@@ -106,6 +106,8 @@ class RuleRetrievalService:
         seed_rule_ids: tuple[str, ...] | None = None,
         relation_budget: RelationQueryBudget | None = None,
         relation_index_version: str | None = None,
+        relation_snapshot: RelationSnapshot | None = None,
+        relation_fallback_reason: str | None = None,
     ) -> RetrievalResult:
         if top_k <= 0:
             raise ValueError("top_k must be positive.")
@@ -125,6 +127,8 @@ class RuleRetrievalService:
                 seed_rule_ids=seed_rule_ids,
                 relation_budget=relation_budget,
                 relation_index_version=relation_index_version,
+                relation_snapshot=relation_snapshot,
+                relation_fallback_reason=relation_fallback_reason,
             )
         if normalized_mode not in {"vector", "hybrid"}:
             raise ValueError(f"Unsupported retrieval mode: {mode!r}.")
@@ -165,6 +169,8 @@ class RuleRetrievalService:
         seed_rule_ids: tuple[str, ...] | None,
         relation_budget: RelationQueryBudget | None,
         relation_index_version: str | None,
+        relation_snapshot: RelationSnapshot | None,
+        relation_fallback_reason: str | None,
     ) -> RetrievalResult:
         def fallback(reason: str) -> RetrievalResult:
             return self._relation_fallback(query, requested_mode, top_k, reason)
@@ -180,7 +186,15 @@ class RuleRetrievalService:
         )
         if not seeds:
             return fallback("relation_seed_required")
-        if self._relation_store is None:
+        if relation_fallback_reason is not None:
+            if relation_fallback_reason not in {
+                "relation_snapshot_missing",
+                "relation_snapshot_not_requested",
+                "relation_snapshot_unconfigured",
+            }:
+                raise ValueError("relation_fallback_reason is invalid")
+            return fallback(relation_fallback_reason)
+        if self._relation_store is None and relation_snapshot is None:
             return fallback("relation_snapshot_unconfigured")
         if relation_index_version is None:
             return fallback("relation_snapshot_required")
@@ -189,16 +203,24 @@ class RuleRetrievalService:
         budget = relation_budget or _DEFAULT_RELATION_BUDGET
         if budget.max_hops > 2:
             return fallback("relation_hop_budget_exceeded")
-        try:
-            snapshot = self._relation_store.load(relation_index_version)
-        except RelationIndexIntegrityError as exc:
-            if "Unsupported relation snapshot schema." in str(exc):
-                fallback_reason = "relation_snapshot_incompatible"
-            elif "is unavailable" in str(exc):
-                fallback_reason = "relation_snapshot_missing"
-            else:
-                fallback_reason = "relation_snapshot_invalid"
-            return fallback(fallback_reason)
+        if relation_snapshot is None:
+            assert self._relation_store is not None
+            try:
+                snapshot = self._relation_store.load(relation_index_version)
+            except RelationIndexIntegrityError as exc:
+                if "Unsupported relation snapshot schema." in str(exc):
+                    fallback_reason = "relation_snapshot_incompatible"
+                elif "is unavailable" in str(exc):
+                    fallback_reason = "relation_snapshot_missing"
+                else:
+                    fallback_reason = "relation_snapshot_invalid"
+                return fallback(fallback_reason)
+        else:
+            snapshot = relation_snapshot
+            if snapshot.manifest.index_version != relation_index_version:
+                raise RelationIndexIntegrityError(
+                    "Verified relation snapshot version does not match request."
+                )
         if snapshot.manifest.source_index_sha256 != self._source_index_sha256:
             return fallback("relation_source_index_mismatch")
         graph_candidate_cap = (

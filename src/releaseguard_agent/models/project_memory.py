@@ -8,9 +8,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 
-from releaseguard_agent.runtime.tools import reject_sensitive_tool_arguments
-
-
 class MemoryKind(str, Enum):
     PROJECT_FACT = "PROJECT_FACT"
     DECISION = "DECISION"
@@ -43,7 +40,7 @@ class MemoryProvenance:
 
     def __post_init__(self) -> None:
         values = self.to_dict()
-        reject_sensitive_tool_arguments(values)
+        _reject_sensitive_tool_arguments(values)
         if not any(values.values()):
             raise ValueError("memory provenance is required")
         for name, value in values.items():
@@ -86,7 +83,7 @@ class ProjectMemoryRecord:
             raise ValueError("provenance is invalid")
         normalized_content = _normalized_content(self.content)
         object.__setattr__(self, "content", normalized_content)
-        reject_sensitive_tool_arguments(self.to_dict())
+        _reject_sensitive_tool_arguments(self.to_dict())
         _canonical_utc(self.created_at_utc, "created_at_utc")
         _canonical_utc(self.updated_at_utc, "updated_at_utc")
         if self.expires_at_utc is not None:
@@ -127,7 +124,7 @@ def validate_project_memory_record_for_persistence(record: ProjectMemoryRecord) 
     if not isinstance(record, ProjectMemoryRecord):
         raise ValueError("memory record must use the frozen record contract")
     record.__post_init__()
-    reject_sensitive_tool_arguments(record.to_dict())
+    _reject_sensitive_tool_arguments(record.to_dict())
 
 
 @dataclass(frozen=True)
@@ -277,6 +274,14 @@ def _looks_like_json(value: str) -> bool:
 def _nonempty(value: object, name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
+
+
+def _reject_sensitive_tool_arguments(value: object) -> None:
+    """Defer the runtime import so model-package loading stays acyclic."""
+
+    from releaseguard_agent.runtime.tools import reject_sensitive_tool_arguments
+
+    reject_sensitive_tool_arguments(value)
 
 
 def _canonical_utc(value: object, name: str) -> None:

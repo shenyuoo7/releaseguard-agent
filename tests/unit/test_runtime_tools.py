@@ -83,6 +83,21 @@ def test_registry_rejects_malformed_arguments_without_invoking_the_handler() -> 
     assert invoked is False
 
 
+def test_registry_restricts_preparers_to_read_only_offline_tools() -> None:
+    registry = ToolRegistry()
+
+    with pytest.raises(ValueError, match="preparer.*read-only offline"):
+        registry.register(
+            echo_spec(
+                side_effect="network",
+                network_policy="network",
+                required_approval_scope="network.echo",
+            ),
+            lambda args, _context: args,
+            preparer=lambda _args, _context: None,  # type: ignore[arg-type]
+        )
+
+
 def test_registry_rejects_output_that_does_not_match_the_declared_schema() -> None:
     registry = ToolRegistry()
     registry.register(echo_spec(), lambda _args, _context: {"message": 7})
@@ -142,6 +157,31 @@ def test_registry_rejects_a_completed_idempotency_key_collision_with_different_a
     assert collision.status == "blocked"
     assert collision.error_type == "idempotency_key_collision"
     assert calls == 1
+
+
+def test_artifact_version_budget_and_fallback_are_part_of_the_call_fingerprint() -> None:
+    base = {
+        "review_ref": "review:abc",
+        "relation_index_version": "ri-" + "1" * 64,
+        "memory_version": "pm-" + "2" * 64,
+        "relation_budget": {"max_hops": 2, "max_nodes": 12},
+        "memory_budget": {"top_k": 1, "max_characters": 100},
+        "artifact_context": {"relation_fallback_reason": None},
+    }
+    original = make_call(tool_name="search_rule_evidence", args=base)
+
+    variants = (
+        {**base, "relation_index_version": "ri-" + "3" * 64},
+        {**base, "memory_version": "pm-" + "4" * 64},
+        {**base, "relation_budget": {"max_hops": 1, "max_nodes": 12}},
+        {**base, "artifact_context": {"relation_fallback_reason": "missing"}},
+    )
+
+    assert all(
+        make_call(tool_name="search_rule_evidence", args=variant).fingerprint
+        != original.fingerprint
+        for variant in variants
+    )
 
 
 def test_registry_validates_malformed_duplicate_before_reusing_a_completed_result() -> None:

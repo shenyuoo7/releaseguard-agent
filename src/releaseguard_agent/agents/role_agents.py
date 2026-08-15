@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from collections.abc import Mapping
 from typing import Any
@@ -9,8 +9,10 @@ from releaseguard_agent.agent_tools import (
     RiskAnalysisTool,
 )
 from releaseguard_agent.models.check_result import CheckStatus
-from releaseguard_agent.models.retrieval_evidence import RetrievalEvidence
-from releaseguard_agent.observability import ExecutionTracer
+from releaseguard_agent.models.project_memory import MemoryContext, MemoryQueryBudget
+from releaseguard_agent.models.relation_index import RelationQueryBudget, RelationSnapshot
+from releaseguard_agent.models.retrieval_evidence import RelationPath, RetrievalEvidence
+from releaseguard_agent.observability import ArtifactContextTrace, ExecutionTracer
 from releaseguard_agent.services.release_review_service import ReleaseReviewResult
 
 
@@ -20,6 +22,12 @@ class EvidenceAgentInput:
     retrieval_mode: str = "hybrid"
     top_k: int = 5
     minimum_evidence: int = 1
+    relation_index_version: str | None = None
+    relation_budget: RelationQueryBudget | None = None
+    relation_snapshot: RelationSnapshot | None = None
+    memory_context: MemoryContext | None = None
+    memory_budget: MemoryQueryBudget | None = None
+    artifact_context: ArtifactContextTrace | None = None
 
 
 @dataclass(frozen=True)
@@ -29,6 +37,7 @@ class EvidenceAgentOutput:
     supplemental_attempted: bool
     manual_review_required: bool
     degraded_reason: str | None
+    artifact_context: ArtifactContextTrace | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -37,21 +46,38 @@ class EvidenceAgentOutput:
             "supplemental_attempted": self.supplemental_attempted,
             "manual_review_required": self.manual_review_required,
             "degraded_reason": self.degraded_reason,
+            "artifact_context": (
+                self.artifact_context.to_dict()
+                if self.artifact_context is not None
+                else None
+            ),
         }
+
+    def to_durable_dict(self) -> dict[str, Any]:
+        """Serialize evidence identity/provenance without raw retrieved text."""
+
+        value = self.to_dict()
+        value["evidence"] = [
+            {**item.to_dict(), "text": "", "metadata": {}}
+            for item in self.evidence
+        ]
+        return value
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "EvidenceAgentOutput":
-        _exact_keys(
-            value,
-            {
+        expected = {
                 "evidence",
                 "sufficient",
                 "supplemental_attempted",
                 "manual_review_required",
                 "degraded_reason",
-            },
-            "evidence output",
-        )
+            }
+        actual = frozenset(value)
+        if actual not in {
+            frozenset(expected),
+            frozenset((*expected, "artifact_context")),
+        }:
+            raise ValueError("evidence output keys do not match")
         raw_evidence = value["evidence"]
         if not isinstance(raw_evidence, (list, tuple)) or not all(
             isinstance(item, Mapping) for item in raw_evidence
@@ -60,6 +86,9 @@ class EvidenceAgentOutput:
         degraded_reason = value["degraded_reason"]
         if degraded_reason is not None and not isinstance(degraded_reason, str):
             raise ValueError("degraded_reason must be a string or null")
+        raw_context = value.get("artifact_context")
+        if raw_context is not None and not isinstance(raw_context, Mapping):
+            raise ValueError("artifact_context must be an object or null")
         return cls(
             evidence=tuple(
                 _retrieval_evidence_from_dict(item)
@@ -73,6 +102,11 @@ class EvidenceAgentOutput:
                 value["manual_review_required"], "manual_review_required"
             ),
             degraded_reason=degraded_reason,
+            artifact_context=(
+                ArtifactContextTrace.from_dict(raw_context)
+                if isinstance(raw_context, Mapping)
+                else None
+            ),
         )
 
 
@@ -88,32 +122,31 @@ class EvidenceAgent:
         self._tracer = tracer
 
     def run(self, request: EvidenceAgentInput) -> EvidenceAgentOutput:
-        actionable = [
-            result
-            for result in request.review.check_results
-            if result.status in {CheckStatus.FAILED, CheckStatus.WARNING}
-        ]
-        grounding_results = actionable or [
-            result
-            for result in request.review.check_results
-            if result.status == CheckStatus.PASSED
-        ]
-        relevant_rule_ids = {
-            result.rule_id for result in grounding_results if result.rule_id
+        query, grounding_results, relevant_rule_ids = evidence_query(
+            request.review,
+            memory_context=request.memory_context,
+        )
+        invoke_args: dict[str, Any] = {
+            "mode": request.retrieval_mode,
+            "top_k": request.top_k,
+            "tracer": self._tracer,
         }
-        query = " ".join(
-            part
-            for result in grounding_results
-            for part in (result.rule_id or "", result.title, result.message)
-        )
-        if not query.strip():
-            query = "release readiness"
-        initial = self._tool.invoke(
-            query,
-            mode=request.retrieval_mode,
-            top_k=request.top_k,
-            tracer=self._tracer,
-        )
+        if request.retrieval_mode.strip().lower() in {
+            "local_graph",
+            "graph_hybrid",
+        }:
+            invoke_args.update(
+                seed_rule_ids=tuple(sorted(relevant_rule_ids)),
+                relation_index_version=request.relation_index_version,
+                relation_budget=request.relation_budget,
+                relation_snapshot=request.relation_snapshot,
+                relation_fallback_reason=(
+                    request.artifact_context.relation_fallback_reason
+                    if request.artifact_context is not None
+                    else None
+                ),
+            )
+        initial = self._tool.invoke(query, **invoke_args)
         combined = {
             item.chunk_id: item
             for item in initial.evidence
@@ -167,7 +200,40 @@ class EvidenceAgent:
             supplemental_attempted=supplemental_attempted,
             manual_review_required=not sufficient,
             degraded_reason=initial.degraded_reason,
+            artifact_context=_trace_with_retrieval(
+                request.artifact_context, initial
+            ),
         )
+
+
+def evidence_query(
+    review: ReleaseReviewResult,
+    *,
+    memory_context: MemoryContext | None = None,
+) -> tuple[str, list[Any], set[str]]:
+    """Build the local evidence query without changing deterministic findings."""
+
+    actionable = [
+        result
+        for result in review.check_results
+        if result.status in {CheckStatus.FAILED, CheckStatus.WARNING}
+    ]
+    grounding_results = actionable or [
+        result for result in review.check_results if result.status == CheckStatus.PASSED
+    ]
+    relevant_rule_ids = {
+        result.rule_id for result in grounding_results if result.rule_id
+    }
+    query = " ".join(
+        part
+        for result in grounding_results
+        for part in (result.rule_id or "", result.title, result.message)
+    )
+    if not query.strip():
+        query = "release readiness"
+    if memory_context is not None and memory_context.content:
+        query = f"{query} {memory_context.content}"
+    return query, grounding_results, relevant_rule_ids
 
 
 @dataclass(frozen=True)
@@ -518,11 +584,21 @@ def _retrieval_evidence_from_dict(
         "rerank_score",
         "text",
         "metadata",
+        "relation_paths",
+        "index_version",
     }
     _exact_keys(value, expected, "retrieval evidence")
     metadata = value["metadata"]
     if not isinstance(metadata, Mapping):
         raise ValueError("retrieval evidence metadata must be an object")
+    raw_paths = value["relation_paths"]
+    if not isinstance(raw_paths, (list, tuple)) or not all(
+        isinstance(item, Mapping) for item in raw_paths
+    ):
+        raise ValueError("retrieval evidence relation_paths must be a list")
+    index_version = value["index_version"]
+    if index_version is not None and not isinstance(index_version, str):
+        raise ValueError("retrieval evidence index_version must be a string or null")
     return RetrievalEvidence(
         evidence_id=str(value["evidence_id"]),
         rule_id=str(value["rule_id"]),
@@ -535,6 +611,80 @@ def _retrieval_evidence_from_dict(
         rerank_score=float(value["rerank_score"]),
         text=str(value["text"]),
         metadata={str(key): str(item) for key, item in metadata.items()},
+        relation_paths=tuple(_relation_path_from_dict(item) for item in raw_paths),
+        index_version=index_version,
+    )
+
+
+def _relation_path_from_dict(value: Mapping[str, Any]) -> RelationPath:
+    _exact_keys(
+        value,
+        {
+            "node_ids",
+            "edge_ids",
+            "source_chunk_ids",
+            "index_version",
+            "hop_count",
+            "path_score",
+        },
+        "relation path",
+    )
+    return RelationPath(
+        node_ids=_required_string_tuple(value["node_ids"], "node_ids"),
+        edge_ids=_required_string_tuple(value["edge_ids"], "edge_ids"),
+        source_chunk_ids=_required_string_tuple(
+            value["source_chunk_ids"], "source_chunk_ids"
+        ),
+        index_version=str(value["index_version"]),
+        hop_count=int(value["hop_count"]),
+        path_score=float(value["path_score"]),
+    )
+
+
+def _required_string_tuple(value: object, name: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)) or not all(
+        isinstance(item, str) and item for item in value
+    ):
+        raise ValueError(f"{name} must contain strings")
+    return tuple(value)
+
+
+def _trace_with_retrieval(
+    trace: ArtifactContextTrace | None,
+    result: Any,
+) -> ArtifactContextTrace | None:
+    if trace is None:
+        return None
+    path_ids = tuple(sorted({
+        f"{item.evidence_id}:{path.index_version}:{','.join(path.edge_ids)}"
+        for item in result.evidence
+        for path in item.relation_paths
+    }))
+    nodes = {
+        node_id
+        for item in result.evidence
+        for path in item.relation_paths
+        for node_id in path.node_ids
+    }
+    edges = {
+        edge_id
+        for item in result.evidence
+        for path in item.relation_paths
+        for edge_id in path.edge_ids
+    }
+    return replace(
+        trace,
+        relation_mode=result.mode_used,
+        relation_fallback_reason=result.degraded_reason,
+        relation_candidate_ids=tuple(sorted(
+            item.evidence_id for item in result.evidence
+        )),
+        relation_path_ids=path_ids,
+        relation_budget_usage=tuple(sorted({
+            "context_characters": sum(len(item.text) for item in result.evidence),
+            "edges": len(edges),
+            "nodes": len(nodes),
+        }.items())),
     )
 
 

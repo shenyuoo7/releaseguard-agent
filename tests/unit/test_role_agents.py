@@ -17,7 +17,13 @@ from releaseguard_agent.agents.role_agents import (
     VerifierAgentInput,
 )
 from releaseguard_agent.llm import FakeLLMClient, LLMRuntime
-from releaseguard_agent.rag import RuleRetrievalService, get_default_rule_index_path
+from releaseguard_agent.models.project_memory import MemoryContext, MemoryQueryBudget
+from releaseguard_agent.models.relation_index import RelationQueryBudget
+from releaseguard_agent.rag import (
+    RetrievalResult,
+    RuleRetrievalService,
+    get_default_rule_index_path,
+)
 from releaseguard_agent.services import ReleaseReviewService
 
 
@@ -90,6 +96,50 @@ def test_four_roles_have_independent_contracts_and_state_transfer() -> None:
     assert blocking_rule_ids.issubset(fix_output.covered_rule_ids)
     assert fix_output.requires_manual_changes is True
     assert any(step["evidence_ids"] for step in fix_output.steps)
+
+
+def test_evidence_role_consumes_bounded_artifact_context_additively() -> None:
+    """Dropping memory text or the pinned graph inputs would lose support context."""
+
+    class RecordingEvidenceTool:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def invoke(self, query: str, **kwargs: object) -> RetrievalResult:
+            self.calls.append({"query": query, **kwargs})
+            return RetrievalResult(query, str(kwargs["mode"]), "bm25", None, ())
+
+    tool = RecordingEvidenceTool()
+    relation_budget = RelationQueryBudget(2, 12, 12, 2_000)
+    memory_budget = MemoryQueryBudget(1, 100, 20)
+    memory_context = MemoryContext(
+        project_id="project-alpha",
+        memory_version="pm-" + "2" * 64,
+        selected=(),
+        omitted=(),
+        content="project-specific release constraint",
+        character_count=35,
+        token_count=3,
+    )
+
+    output = EvidenceAgent(tool).run(  # type: ignore[arg-type]
+        EvidenceAgentInput(
+            review=_blocking_review(),
+            retrieval_mode="graph_hybrid",
+            relation_index_version="ri-" + "1" * 64,
+            relation_budget=relation_budget,
+            memory_context=memory_context,
+            memory_budget=memory_budget,
+            minimum_evidence=1,
+        )
+    )
+
+    initial = tool.calls[0]
+    assert "project-specific release constraint" in str(initial["query"])
+    assert initial["relation_index_version"] == "ri-" + "1" * 64
+    assert initial["relation_budget"] == relation_budget
+    assert set(initial["seed_rule_ids"]) >= {"RG-FASTAPI-001"}  # type: ignore[arg-type]
+    assert output.manual_review_required is True
 
 
 def test_verifier_agent_compares_before_and_after_without_mutating_projects(

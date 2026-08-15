@@ -1,9 +1,14 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from releaseguard_agent.llm import FakeLLMClient, LLMRuntime
 from releaseguard_agent.observability import ExecutionTracer
-from releaseguard_agent.observability.execution_trace import _redact
+from releaseguard_agent.observability.execution_trace import (
+    ArtifactContextTrace,
+    _redact,
+)
 from releaseguard_agent.services.agent_workflow_service import (
     ReleaseAgentWorkflowService,
 )
@@ -140,6 +145,74 @@ def test_execution_trace_uses_the_final_durable_run_status_over_history() -> Non
 
     assert payload["events"][0]["status"] == "error"
     assert payload["status"] == "success"
+
+
+def test_runtime_trace_accepts_only_typed_redacted_artifact_context() -> None:
+    context = ArtifactContextTrace(
+        relation_index_version="ri-" + "1" * 64,
+        relation_sha256="1" * 64,
+        relation_mode="local_graph",
+        relation_fallback_reason=None,
+        relation_candidate_ids=("EVID-RULE-1",),
+        relation_path_ids=("path-1",),
+        relation_budget=(
+            ("max_context_characters", 2000),
+            ("max_edges", 12),
+            ("max_hops", 2),
+            ("max_nodes", 12),
+        ),
+        relation_budget_usage=(
+            ("context_characters", 200),
+            ("edges", 1),
+            ("nodes", 2),
+        ),
+        memory_version="pm-" + "2" * 64,
+        memory_sha256="2" * 64,
+        memory_mode="selected",
+        memory_fallback_reason=None,
+        selected_memory_ids=("memory-1",),
+        omitted_memory=(("memory-2", "disabled"),),
+        memory_budget=(
+            ("max_characters", 100),
+            ("max_estimated_units", 20),
+            ("top_k", 1),
+        ),
+        memory_budget_usage=(("characters", 40), ("estimated_units", 5)),
+    )
+    tracer = ExecutionTracer(run_id="artifact-context-run")
+
+    tracer.runtime_event(
+        run_id="artifact-context-run",
+        event_kind="TOOL_REQUESTED",
+        event_sequence=1,
+        artifact_context=context,
+    )
+
+    event = tracer.to_dict()["events"][0]
+    assert event["artifact_context"] == context.to_dict()
+    assert ArtifactContextTrace.from_dict(event["artifact_context"]) == context
+    assert "content" not in repr(event["artifact_context"]).lower()
+
+
+def test_public_context_budget_survives_while_sensitive_token_value_is_redacted() -> None:
+    redacted = _redact(
+        {
+            "max_context_units": 20,
+            "token": "sk-task4-sensitive-token-value",
+        }
+    )
+
+    assert redacted["max_context_units"] == 20
+    assert "token" not in redacted
+    assert "task4-sensitive-token-value" not in repr(redacted)
+
+    with pytest.raises(ValueError, match="budget keys"):
+        ArtifactContextTrace(memory_budget=(("token", 20),))
+
+    malformed = ArtifactContextTrace().to_dict()
+    malformed["relation_mode"] = 7
+    with pytest.raises(ValueError, match="strings"):
+        ArtifactContextTrace.from_dict(malformed)
 
 
 def test_agent_workflow_trace_records_nodes_tools_retrieval_llm_and_artifact(

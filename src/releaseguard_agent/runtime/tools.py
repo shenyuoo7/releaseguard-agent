@@ -7,7 +7,7 @@ import json
 import re
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from typing import Any, Literal
 from types import MappingProxyType
@@ -20,6 +20,9 @@ from .models import canonical_json, sha256_json
 
 Schema = Mapping[str, type | tuple[type, ...]]
 ToolHandler = Callable[[dict[str, Any], ToolExecutionContext], Mapping[str, Any]]
+ToolPreparer = Callable[
+    [dict[str, Any], ToolExecutionContext], "ToolPreparationResult"
+]
 ToolStatus = Literal["completed", "blocked", "retry", "quarantined", "error"]
 
 
@@ -217,6 +220,21 @@ class ToolResult:
 
 
 @dataclass(frozen=True)
+class ToolPreparationResult:
+    """Safe canonical arguments and ephemeral references resolved before start."""
+
+    arguments: Mapping[str, Any]
+    references: Mapping[str, object] = dataclass_field(default_factory=dict)
+    error_type: str | None = None
+
+
+@dataclass(frozen=True)
+class PreparedToolCall:
+    call: ToolCall
+    error_type: str | None = None
+
+
+@dataclass(frozen=True)
 class _CompletedToolResult:
     fingerprint: tuple[str, str, str]
     result: ToolResult
@@ -230,8 +248,19 @@ class ToolRegistry:
         self._guardrails = guardrails or GuardrailEngine()
         self._specs: dict[tuple[str, str], ToolSpec] = {}
         self._handlers: dict[tuple[str, str], ToolHandler] = {}
+        self._preparers: dict[tuple[str, str], ToolPreparer] = {}
 
-    def register(self, spec: ToolSpec, handler: ToolHandler) -> None:
+    def register(
+        self,
+        spec: ToolSpec,
+        handler: ToolHandler,
+        *,
+        preparer: ToolPreparer | None = None,
+    ) -> None:
+        if preparer is not None and (
+            spec.side_effect != "read_only" or spec.network_policy != "offline"
+        ):
+            raise ValueError("preparer requires a read-only offline tool")
         if not _capabilities_are_consistent(spec):
             raise ValueError("tool capability classification is inconsistent")
         if _requires_approval(spec) and spec.required_approval_scope is None:
@@ -243,9 +272,35 @@ class ToolRegistry:
             raise ValueError(f"tool already registered: {spec.name}@{spec.version}")
         self._specs[key] = spec
         self._handlers[key] = handler
+        if preparer is not None:
+            self._preparers[key] = preparer
 
     def get(self, name: str, version: str) -> ToolSpec | None:
         return self._specs.get((name, version))
+
+    def prepare(
+        self,
+        call: ToolCall,
+        context: ToolExecutionContext,
+    ) -> PreparedToolCall:
+        """Resolve read-only inputs before the durable tool request/start boundary."""
+
+        preparer = self._preparers.get((call.tool_name, call.tool_version))
+        if preparer is None:
+            return PreparedToolCall(call)
+        outcome = preparer(call.args, context)
+        prepared = ToolCall.create(
+            tool_name=call.tool_name,
+            tool_version=call.tool_version,
+            args=outcome.arguments,
+            run_id=call.run_id,
+            step_index=call.step_index,
+            idempotency_key=call.idempotency_key,
+        )
+        next_references = dict(context.references)
+        next_references.update(copy.deepcopy(dict(outcome.references)))
+        context.references = next_references
+        return PreparedToolCall(prepared, outcome.error_type)
 
     def execute(self, call: ToolCall, context: ToolExecutionContext) -> ToolResult:
         spec = self.get(call.tool_name, call.tool_version)

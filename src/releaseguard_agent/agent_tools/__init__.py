@@ -1,7 +1,10 @@
 from releaseguard_agent.agent_tools.release_tools import (
+    ArtifactContextIntegrityError,
+    ArtifactContextRequest,
     EvidenceSearchTool,
     FixPlanTool,
     ReleaseWorkflowTools,
+    ResolvedArtifactContext,
     RiskAnalysisTool,
     RiskToolResult,
     ScanProjectTool,
@@ -10,9 +13,12 @@ from releaseguard_agent.agent_tools.release_tools import (
 
 
 __all__ = (
+    "ArtifactContextIntegrityError",
+    "ArtifactContextRequest",
     "EvidenceSearchTool",
     "FixPlanTool",
     "ReleaseWorkflowTools",
+    "ResolvedArtifactContext",
     "RiskAnalysisTool",
     "RiskToolResult",
     "ScanProjectTool",

@@ -25,7 +25,9 @@ from releaseguard_agent.rag.vector_retriever import LlamaIndexVectorRetriever
 from releaseguard_agent.rag.relation_index import (
     RelationIndexIntegrityError,
     RelationIndexStore,
+    _source_index_digest,
 )
+from releaseguard_agent.rag.rule_index_retriever import RuleIndexRetriever
 
 
 _DEFAULT_RELATION_BUDGET = RelationQueryBudget(2, 24, 24, 8_000)
@@ -86,6 +88,9 @@ class RuleRetrievalService:
             else None
         )
         self._chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
+        self._source_index_sha256 = _source_index_digest(
+            RuleIndexRetriever.from_file(index_path), chunks
+        )
         self._relation_store = (
             RelationIndexStore(relation_snapshot_root)
             if relation_snapshot_root is not None
@@ -187,12 +192,15 @@ class RuleRetrievalService:
         try:
             snapshot = self._relation_store.load(relation_index_version)
         except RelationIndexIntegrityError as exc:
-            fallback_reason = (
-                "relation_snapshot_missing"
-                if "is unavailable" in str(exc)
-                else "relation_snapshot_invalid"
-            )
+            if "Unsupported relation snapshot schema." in str(exc):
+                fallback_reason = "relation_snapshot_incompatible"
+            elif "is unavailable" in str(exc):
+                fallback_reason = "relation_snapshot_missing"
+            else:
+                fallback_reason = "relation_snapshot_invalid"
             return fallback(fallback_reason)
+        if snapshot.manifest.source_index_sha256 != self._source_index_sha256:
+            return fallback("relation_source_index_mismatch")
         graph_evidence, reason = self._expand_snapshot(
             snapshot, seeds, budget, top_k
         )
@@ -351,6 +359,10 @@ class RuleRetrievalService:
         graph_evidence: tuple[RetrievalEvidence, ...],
         top_k: int,
     ) -> list[RetrievalEvidence]:
+        """Fuse at most 20 candidates per channel using RRF ``1 / (60 + rank)``.
+
+        Equal scores sort by chunk ID; the caller's ``top_k`` is the final cap.
+        """
         candidates: dict[str, _GraphFusionCandidate] = {}
         for channel, items in (("text", text_evidence), ("graph", graph_evidence)):
             for rank, item in enumerate(items[:_GRAPH_CANDIDATE_CAP], start=1):

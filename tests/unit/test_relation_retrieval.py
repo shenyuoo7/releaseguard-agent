@@ -1,4 +1,5 @@
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -13,6 +14,9 @@ from releaseguard_agent.rag.relation_index import RelationIndexBuilder
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_ROOT = PROJECT_ROOT / ".runtime" / "relation-retrieval-tests"
 RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
+FIXTURE_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "relation_retrieval"
+FIXTURE_INDEX_PATH = Path("tests/fixtures/relation_retrieval/rule_index.md")
+FIXTURE_INDEX_VERSION = "ri-a07a5a45823c0f01d8008a205e75db1066dea90a3ee7bc9d037103ab58a300de"
 
 HEADER = (
     "| rule_id | rule_name | checker | source | support_level | "
@@ -87,6 +91,161 @@ def _budget(**overrides: int) -> RelationQueryBudget:
     }
     values.update(overrides)
     return RelationQueryBudget(**values)
+
+
+def _fixed_snapshot_service(root: Path) -> RuleRetrievalService:
+    """Load Task 1-compatible fixture bytes rather than building a graph in-test."""
+    snapshot_root = root / "snapshots"
+    shutil.copytree(FIXTURE_ROOT / "snapshot", snapshot_root)
+    for artifact in snapshot_root.rglob("*.json"):
+        artifact.write_bytes(artifact.read_bytes().rstrip(b"\r\n"))
+    return RuleRetrievalService(
+        FIXTURE_INDEX_PATH,
+        relation_snapshot_root=snapshot_root,
+    )
+
+
+def _build_large_service(
+    root: Path, *, rule_count: int
+) -> tuple[RuleRetrievalService, str]:
+    corpus_root = root / "large-corpus"
+    corpus_root.mkdir()
+    rows = [HEADER, SEPARATOR]
+    mappings = [
+        "# Large Fixture",
+        "",
+        "## Source",
+        "",
+        "- URL: https://example.com/large-fixture",
+        "- Type: documentation",
+        "",
+        "## ReleaseGuard Rule Mapping",
+        "",
+        SOURCE_HEADER,
+        SOURCE_SEPARATOR,
+    ]
+    for number in range(1, rule_count + 1):
+        rule_id = f"RG-CAP-{number:03d}"
+        rows.append(
+            f"| {rule_id} | Candidate {number:03d} | CapChecker | fixture | "
+            "source-backed | medium | warn | candidate_exists | cap-phase |"
+        )
+        mappings.append(
+            f"| {rule_id} | Verify candidate {number:03d} | source-backed | warn | "
+            "candidate_exists | Fixed large fixture boundary. |"
+        )
+    index_path = corpus_root / "rule_index.md"
+    index_path.write_text("\n".join((*rows, "")), encoding="utf-8")
+    source_directory = corpus_root / "sources"
+    source_directory.mkdir()
+    (source_directory / "trusted.md").write_text(
+        "\n".join((*mappings, "")), encoding="utf-8"
+    )
+    snapshot_root = root / "large-snapshots"
+    snapshot = RelationIndexBuilder().build(index_path, snapshot_root)
+    return (
+        RuleRetrievalService(index_path, relation_snapshot_root=snapshot_root),
+        snapshot.manifest.index_version,
+    )
+
+
+def test_fixed_task1_snapshot_fixture_is_usable_for_relation_retrieval() -> None:
+    """Would fail if a checked-in immutable Task 1 snapshot became incompatible."""
+    with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as temporary_directory:
+        service = _fixed_snapshot_service(Path(temporary_directory))
+        result = service.retrieve(
+            "fixed fixture",
+            mode="local_graph",
+            top_k=2,
+            seed_rule_ids=("RG-FIXTURE-001",),
+            relation_index_version=FIXTURE_INDEX_VERSION,
+            relation_budget=_budget(),
+        )
+
+    assert result.mode_used == "local_graph"
+    assert result.evidence[0].index_version == FIXTURE_INDEX_VERSION
+
+
+def test_stale_snapshot_falls_back_before_mixing_current_corpus_evidence() -> None:
+    """Would fail if snapshot graph IDs were joined to changed corpus metadata."""
+    with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as temporary_directory:
+        root = Path(temporary_directory)
+        _, version, snapshot_root = _build_service(root)
+        index_path = root / "corpus" / "rule_index.md"
+        index_path.write_text(
+            index_path.read_text(encoding="utf-8").replace(
+                "Tests exist", "Changed tests exist"
+            ),
+            encoding="utf-8",
+        )
+        service = RuleRetrievalService(
+            index_path, relation_snapshot_root=snapshot_root
+        )
+        result = service.retrieve(
+            "tests",
+            mode="local_graph",
+            top_k=2,
+            seed_rule_ids=("RG-TEST-001",),
+            relation_index_version=version,
+            relation_budget=_budget(),
+        )
+
+    assert result.mode_used == "bm25"
+    assert result.degraded_reason == "relation_source_index_mismatch"
+    assert all(not item.relation_paths for item in result.evidence)
+
+
+def test_incompatible_snapshot_schema_falls_back_with_precise_reason() -> None:
+    """Would fail if an unsupported Task 1 schema were treated as generic graph data."""
+    with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as temporary_directory:
+        service, version, snapshot_root = _build_service(Path(temporary_directory))
+        manifest_path = snapshot_root / version / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["schema_version"] = "999"
+        manifest_path.write_bytes(
+            json.dumps(
+                manifest,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        result = service.retrieve(
+            "tests",
+            mode="local_graph",
+            top_k=2,
+            seed_rule_ids=("RG-TEST-001",),
+            relation_index_version=version,
+            relation_budget=_budget(),
+        )
+
+    assert result.mode_used == "bm25"
+    assert result.degraded_reason == "relation_snapshot_incompatible"
+
+
+def test_graph_hybrid_pins_rrf_order_channel_cap_and_final_cap() -> None:
+    """Would fail if RRF fusion changed its documented order or candidate bounds."""
+    with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as temporary_directory:
+        service, version = _build_large_service(
+            Path(temporary_directory), rule_count=25
+        )
+        arguments = {
+            "mode": "graph_hybrid",
+            "seed_rule_ids": ("RG-CAP-025",),
+            "relation_index_version": version,
+            "relation_budget": _budget(max_nodes=100, max_edges=100),
+        }
+        unbounded = service.retrieve("fixture", top_k=25, **arguments)
+        capped = service.retrieve("fixture", top_k=5, **arguments)
+
+    assert len(unbounded.evidence) == 21
+    assert [item.chunk_id for item in capped.evidence] == [
+        "RG-CAP-001:chunk-01",
+        "RG-CAP-025:chunk-01",
+        "RG-CAP-002:chunk-01",
+        "RG-CAP-003:chunk-01",
+        "RG-CAP-004:chunk-01",
+    ]
 
 
 def test_local_graph_returns_only_verified_chunk_paths_with_provenance() -> None:

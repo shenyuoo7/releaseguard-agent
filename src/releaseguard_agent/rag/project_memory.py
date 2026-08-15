@@ -109,35 +109,21 @@ class ProjectMemoryStore:
                         "memory version already has conflicting source"
                     )
                 return existing
-            self._reject_divergent_successor(project_id, parent, snapshot)
+            self._reject_additional_successor(project_id, parent)
             _publish_snapshot(self._output_root, snapshot)
         return self.load(project_id, memory_version)
 
-    def _reject_divergent_successor(
+    def _reject_additional_successor(
         self,
         project_id: str,
         parent: ProjectMemorySnapshot | None,
-        candidate: ProjectMemorySnapshot,
     ) -> None:
         if parent is None:
             return
-        candidate_targets = {
-            record.supersedes
-            for record in candidate.records
-            if record.supersedes is not None
-        }
-        if not candidate_targets:
-            return
-        for child in self._published_children(project_id, parent.manifest.memory_version):
-            existing_targets = {
-                record.supersedes
-                for record in child.records
-                if record.supersedes is not None
-            }
-            if candidate_targets & existing_targets:
-                raise ProjectMemoryIntegrityError(
-                    "memory parent already has a published successor"
-                )
+        if self._published_children(project_id, parent.manifest.memory_version):
+            raise ProjectMemoryIntegrityError(
+                "memory parent already has a published successor"
+            )
 
     def _published_children(
         self,

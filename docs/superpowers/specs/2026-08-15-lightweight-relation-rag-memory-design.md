@@ -1,7 +1,7 @@
 # ReleaseGuard Lightweight Relation RAG and Project Memory Design
 
-**Status:** approved route, design review pending  
-**Date:** 2026-08-15  
+**Status:** approved route, design review pending
+**Date:** 2026-08-15
 **Scope:** the next ReleaseGuard Agent capability slice after the durable tool
 runtime. This design adds versioned relation-enhanced retrieval and transparent
 project memory without replacing deterministic release policy or introducing

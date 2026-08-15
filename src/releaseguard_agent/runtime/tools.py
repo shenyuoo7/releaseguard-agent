@@ -259,8 +259,11 @@ class ToolRegistry:
     ) -> None:
         if preparer is not None and (
             spec.side_effect != "read_only" or spec.network_policy != "offline"
+            or spec.required_approval_scope is not None
         ):
-            raise ValueError("preparer requires a read-only offline tool")
+            raise ValueError(
+                "preparer requires a read-only offline tool without approval"
+            )
         if not _capabilities_are_consistent(spec):
             raise ValueError("tool capability classification is inconsistent")
         if _requires_approval(spec) and spec.required_approval_scope is None:

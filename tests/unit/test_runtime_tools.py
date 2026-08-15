@@ -10,6 +10,7 @@ from releaseguard_agent.runtime.models import RunBudget
 from releaseguard_agent.runtime.tools import (
     SensitiveToolArgumentError,
     ToolCall,
+    ToolPreparationResult,
     ToolRegistry,
     ToolSpec,
 )
@@ -96,6 +97,43 @@ def test_registry_restricts_preparers_to_read_only_offline_tools() -> None:
             lambda args, _context: args,
             preparer=lambda _args, _context: None,  # type: ignore[arg-type]
         )
+
+
+def test_registry_rejects_approval_gated_preparer_before_it_can_run() -> None:
+    registry = ToolRegistry()
+    preparer_calls = 0
+
+    def preparer(
+        args: dict[str, object],
+        _context: ToolExecutionContext,
+    ) -> ToolPreparationResult:
+        nonlocal preparer_calls
+        preparer_calls += 1
+        return ToolPreparationResult(arguments=args)
+
+    with pytest.raises(ValueError, match="preparer.*approval"):
+        registry.register(
+            echo_spec(required_approval_scope="read.echo"),
+            lambda args, _context: args,
+            preparer=preparer,
+        )
+
+    assert registry.get("echo", "1") is None
+    registry.prepare(make_call(), make_context())
+    assert preparer_calls == 0
+
+
+def test_registry_allows_unapproved_read_only_offline_preparer() -> None:
+    registry = ToolRegistry()
+
+    registry.register(
+        echo_spec(),
+        lambda args, _context: args,
+        preparer=lambda args, _context: ToolPreparationResult(arguments=args),
+    )
+
+    prepared = registry.prepare(make_call(), make_context())
+    assert prepared.call == make_call()
 
 
 def test_registry_rejects_output_that_does_not_match_the_declared_schema() -> None:

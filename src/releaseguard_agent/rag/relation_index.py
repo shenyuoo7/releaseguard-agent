@@ -116,10 +116,16 @@ class RelationIndexStore:
         _validate_index_version(index_version)
         if index_version in seen_versions:
             raise RelationIndexIntegrityError("Relation snapshot parent cycle detected.")
-        version_root = self._output_root / index_version
-        manifest_raw = _read_artifact(version_root / "manifest.json")
-        nodes_raw = _read_artifact(version_root / "nodes.json")
-        edges_raw = _read_artifact(version_root / "edges.json")
+        version_root = _resolve_contained_path(
+            self._output_root / index_version,
+            allowed_root=self._output_root,
+            label="version directory",
+        )
+        if not version_root.is_dir():
+            raise RelationIndexIntegrityError("Relation version path is not a directory.")
+        manifest_raw = _read_artifact(version_root / "manifest.json", version_root)
+        nodes_raw = _read_artifact(version_root / "nodes.json", version_root)
+        edges_raw = _read_artifact(version_root / "edges.json", version_root)
         manifest = _manifest_from_bytes(manifest_raw)
         nodes = _nodes_from_bytes(nodes_raw)
         edges = _edges_from_bytes(edges_raw)
@@ -397,9 +403,18 @@ def _publish_snapshot(
             shutil.rmtree(temporary_path)
 
 
-def _read_artifact(path: Path) -> bytes:
+def _read_artifact(path: Path, version_root: Path) -> bytes:
+    resolved_path = _resolve_contained_path(
+        path,
+        allowed_root=version_root,
+        label="artifact",
+    )
+    if not resolved_path.is_file():
+        raise RelationIndexIntegrityError(
+            f"Required relation artifact is unavailable: {path.name}."
+        )
     try:
-        return path.read_bytes()
+        return resolved_path.read_bytes()
     except OSError as error:
         raise RelationIndexIntegrityError(
             f"Required relation artifact is unavailable: {path.name}."
@@ -707,6 +722,30 @@ def _validate_index_version(index_version: str) -> None:
         index_version
     ) is None:
         raise RelationIndexIntegrityError("Invalid relation index version.")
+
+
+def _resolve_contained_path(
+    path: Path,
+    *,
+    allowed_root: Path,
+    label: str,
+) -> Path:
+    try:
+        resolved_path = Path(path).resolve(strict=True)
+    except OSError as error:
+        raise RelationIndexIntegrityError(
+            f"Required relation {label} is unavailable."
+        ) from error
+    runtime_root = _RUNTIME_ROOT.resolve()
+    resolved_allowed_root = Path(allowed_root).resolve()
+    try:
+        resolved_path.relative_to(runtime_root)
+        resolved_path.relative_to(resolved_allowed_root)
+    except ValueError as error:
+        raise RelationIndexIntegrityError(
+            f"Resolved relation {label} is outside the approved runtime root or version directory."
+        ) from error
+    return resolved_path
 
 
 def _canonical_bytes(value: object) -> bytes:

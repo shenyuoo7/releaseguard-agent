@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import tempfile
 from hashlib import sha256
 from pathlib import Path
@@ -125,6 +127,18 @@ def _rewrite_artifact_digests(
     manifest["nodes_sha256"] = sha256(nodes_raw).hexdigest()
     manifest["edges_sha256"] = sha256(edges_raw).hexdigest()
     _write_canonical_json(manifest_path, manifest)
+
+
+def _link_directory(link_path: Path, target_path: Path) -> None:
+    try:
+        os.symlink(target_path, link_path, target_is_directory=True)
+    except OSError:
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link_path), str(target_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
 
 def test_builds_trusted_relation_nodes_edges_and_chunk_provenance() -> None:
@@ -260,6 +274,34 @@ def test_rejects_non_runtime_output_roots_and_recursive_parent_traversal() -> No
             RelationIndexIntegrityError, match="Invalid relation index version"
         ):
             RelationIndexStore(output_root).load(snapshot.manifest.index_version)
+
+
+def test_store_rejects_top_level_and_parent_symlink_escapes() -> None:
+    """Would fail if a valid version name resolves through a link outside runtime."""
+    with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as temporary_directory:
+        index_path, output_root = _build_fixture(Path(temporary_directory))
+        builder = RelationIndexBuilder()
+        parent = builder.build(index_path, output_root)
+        parent_path = output_root / parent.manifest.index_version
+        parent_path.rename(output_root / "saved-parent")
+        _link_directory(parent_path, PROJECT_ROOT)
+
+        with pytest.raises(
+            RelationIndexIntegrityError, match="outside the approved runtime root"
+        ):
+            RelationIndexStore(output_root).load(parent.manifest.index_version)
+
+        os.rmdir(parent_path)
+        (output_root / "saved-parent").rename(parent_path)
+        _write_corpus(index_path.parent, include_second_rule=False)
+        child = builder.build(index_path, output_root, parent_snapshot=parent)
+        parent_path.rename(output_root / "saved-parent-again")
+        _link_directory(parent_path, PROJECT_ROOT)
+
+        with pytest.raises(
+            RelationIndexIntegrityError, match="outside the approved runtime root"
+        ):
+            RelationIndexStore(output_root).load(child.manifest.index_version)
 
 
 def test_suppresses_duplicate_relations_and_validates_query_budget() -> None:

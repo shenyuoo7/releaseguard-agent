@@ -1,0 +1,106 @@
+{
+  "schema_version": "1.0",
+  "dataset_type": "relation_rag_memory",
+  "content_sha256": "f9c4822d297bbe6c5a32532059e6f1589fddc46905adf7689d4634ca551bbeef",
+  "corpora": {
+    "baseline": {
+      "rule_index": "| rule_id | rule_name | checker | source | support_level | priority | blocking_policy | evidence_type | phase |\n|---|---|---|---|---|---|---|---|---|\n| RG-EVAL-001 | Container user policy | DockerChecker | trusted | source-backed | high | block | file_content | image |\n| RG-EVAL-002 | Pytest command policy | TestChecker | trusted | source-backed | medium | warn | command_result | image |\n",
+      "sources": {
+        "trusted.md": "# Trusted evaluation source\n\n## Source\n\n- URL: https://example.invalid/releaseguard/eval\n- Type: documentation\n\n## ReleaseGuard Rule Mapping\n\n| rule_id | ReleaseGuard rule | support_level | blocking_policy | evidence_type | boundary |\n|---|---|---|---|---|---|\n| RG-EVAL-001 | Require a non-root container user. | source-backed | block | file_content | Baseline container user boundary. |\n| RG-EVAL-002 | Require a successful pytest command. | source-backed | warn | command_result | Baseline pytest execution boundary. |\n"
+      }
+    },
+    "incremental": {
+      "parent": "baseline",
+      "rule_index": "| rule_id | rule_name | checker | source | support_level | priority | blocking_policy | evidence_type | phase |\n|---|---|---|---|---|---|---|---|---|\n| RG-EVAL-001 | Container user policy | DockerChecker | trusted | source-backed | high | block | file_content | image |\n| RG-EVAL-003 | Health endpoint policy | ApiChecker | trusted | source-backed | medium | warn | endpoint_exists | deploy |\n",
+      "sources": {
+        "trusted.md": "# Trusted evaluation source\n\n## Source\n\n- URL: https://example.invalid/releaseguard/eval\n- Type: documentation\n\n## ReleaseGuard Rule Mapping\n\n| rule_id | ReleaseGuard rule | support_level | blocking_policy | evidence_type | boundary |\n|---|---|---|---|---|---|\n| RG-EVAL-001 | Require a non-root container user. | source-backed | block | file_content | Updated container UID 10001 boundary. |\n| RG-EVAL-003 | Require a health endpoint. | source-backed | warn | endpoint_exists | Incremental health endpoint boundary. |\n"
+      }
+    }
+  },
+  "relation_cases": [
+    {
+      "id": "local-one-hop",
+      "corpus": "baseline",
+      "mode": "local_graph",
+      "query": "container user",
+      "top_k": 1,
+      "seed_rule_ids": ["RG-EVAL-001"],
+      "budget": {"max_hops": 1, "max_nodes": 12, "max_edges": 12, "max_context_characters": 2000},
+      "expected_rule_ids": ["RG-EVAL-001"],
+      "expected_path_node_ids": [["rule:RG-EVAL-001", "chunk:RG-EVAL-001:chunk-01"]],
+      "expected_path_node_type_sequences": [["RULE", "SOURCE"]],
+      "expected_citations": [{"rule_id": "RG-EVAL-001", "source_url": "https://example.invalid/releaseguard/eval", "local_source_suffix": "trusted.md", "chunk_id": "RG-EVAL-001:chunk-01"}]
+    },
+    {
+      "id": "local-two-hop-budget",
+      "corpus": "baseline",
+      "mode": "local_graph",
+      "query": "pytest command",
+      "top_k": 2,
+      "seed_rule_ids": ["RG-EVAL-001"],
+      "budget": {"max_hops": 2, "max_nodes": 16, "max_edges": 16, "max_context_characters": 2000},
+      "expected_rule_ids": ["RG-EVAL-001"],
+      "expected_path_node_ids": [["rule:RG-EVAL-001", "chunk:RG-EVAL-001:chunk-01"]],
+      "expected_path_node_type_sequences": [["RULE", "SOURCE"]],
+      "expected_traversal_paths": [{"node_ids": ["rule:RG-EVAL-001", "phase:image", "rule:RG-EVAL-002"], "relation_types": ["RULE_APPLIES_TO_PHASE", "RULE_APPLIES_TO_PHASE"], "source_chunk_ids": ["RG-EVAL-001:chunk-01", "RG-EVAL-002:chunk-01"], "hop_count": 2}],
+      "expected_citations": [{"rule_id": "RG-EVAL-001", "source_url": "https://example.invalid/releaseguard/eval", "local_source_suffix": "trusted.md", "chunk_id": "RG-EVAL-001:chunk-01"}]
+    },
+    {
+      "id": "graph-hybrid",
+      "corpus": "baseline",
+      "mode": "graph_hybrid",
+      "query": "pytest container policy",
+      "top_k": 2,
+      "seed_rule_ids": ["RG-EVAL-001"],
+      "budget": {"max_hops": 2, "max_nodes": 16, "max_edges": 16, "max_context_characters": 2000},
+      "expected_rule_ids": ["RG-EVAL-001"],
+      "expected_path_node_ids": [["rule:RG-EVAL-001", "chunk:RG-EVAL-001:chunk-01"]],
+      "expected_path_node_type_sequences": [["RULE", "SOURCE"]],
+      "expected_citations": [{"rule_id": "RG-EVAL-001", "source_url": "https://example.invalid/releaseguard/eval", "local_source_suffix": "trusted.md", "chunk_id": "RG-EVAL-001:chunk-01"}]
+    }
+  ],
+  "fallback_cases": [
+    {"id": "no-seed", "kind": "relation", "corpus": "baseline", "mode": "local_graph", "query": "container", "seed_rule_ids": [], "expected_reason": "relation_seed_required"},
+    {"id": "missing-graph", "kind": "relation", "corpus": "baseline", "mode": "local_graph", "query": "container", "seed_rule_ids": ["RG-EVAL-001"], "snapshot_state": "missing", "expected_reason": "relation_snapshot_missing"},
+    {"id": "corrupt-graph", "kind": "relation", "corpus": "baseline", "mode": "graph_hybrid", "query": "container", "seed_rule_ids": ["RG-EVAL-001"], "snapshot_state": "corrupt", "expected_reason": "relation_snapshot_invalid"},
+    {"id": "missing-memory", "kind": "memory", "project_id": "project-alpha", "memory": "baseline", "snapshot_state": "missing", "expected_reason": "memory_version_missing"},
+    {"id": "tampered-memory", "kind": "memory", "project_id": "project-alpha", "memory": "baseline", "snapshot_state": "corrupt", "expected_reason": "memory_source_invalid"},
+    {"id": "memory-budget-empty", "kind": "memory", "project_id": "project-alpha", "memory": "incremental", "query": "container", "budget": {"top_k": 2, "max_characters": 1, "max_tokens": 1}, "expected_reason": "memory_context_budget_exceeded"}
+  ],
+  "incremental_cases": [
+    {"id": "changed-and-deleted-source", "kind": "relation", "baseline": "baseline", "incremental": "incremental", "seed_rule_ids": ["RG-EVAL-001"], "query": "UID 10001", "expected_selected_rule_ids": ["RG-EVAL-001"], "expected_text": "Updated container UID 10001 boundary.", "forbidden_text": "Baseline container user boundary.", "expected_tombstoned_node_ids": ["rule:RG-EVAL-002", "chunk:RG-EVAL-002:chunk-01"]},
+    {"id": "superseded-memory-hidden", "kind": "memory", "baseline": "baseline", "incremental": "incremental", "project_id": "project-alpha", "query": "container", "expected_selected_ids": ["memory-container-v2"], "forbidden_selected_ids": ["memory-container-v1"]}
+  ],
+  "reproducibility_cases": [
+    {"id": "relation-content-addressed-rebuild", "kind": "relation", "corpus": "baseline"},
+    {"id": "memory-content-addressed-rebuild", "kind": "memory", "memory": "baseline", "project_id": "project-alpha"},
+    {"id": "older-relation-version-replay", "kind": "relation_replay", "corpus": "baseline", "seed_rule_ids": ["RG-EVAL-001"], "query": "container", "expected_rule_ids": ["RG-EVAL-001"], "expected_text": "Baseline container user boundary."},
+    {"id": "older-memory-version-replay", "kind": "memory_replay", "memory": "baseline", "project_id": "project-alpha", "query": "container", "expected_selected_ids": ["memory-container-v1"], "expected_content": "Containers must run as a non-root user."}
+  ],
+  "memory_versions": {
+    "baseline": {
+      "project_id": "project-alpha",
+      "records": [
+        {"memory_id": "memory-container-v1", "kind": "CONSTRAINT", "content": "Containers must run as a non-root user.", "status": "ACTIVE", "confidence": 0.95, "supersedes": null, "provenance": {"run_id": "run-baseline", "event_id": "event-1", "evidence_id": "EVID-RG-EVAL-001", "rule_id": "RG-EVAL-001", "human_correction_id": null}},
+        {"memory_id": "memory-disabled", "kind": "RUN_LESSON", "content": "Disabled legacy container guidance.", "status": "DISABLED", "confidence": 0.7, "supersedes": null, "provenance": {"run_id": "run-baseline", "event_id": "event-2", "evidence_id": null, "rule_id": "RG-EVAL-001", "human_correction_id": null}},
+        {"memory_id": "memory-superseded", "kind": "DECISION", "content": "Superseded container port decision.", "status": "SUPERSEDED", "confidence": 0.8, "supersedes": null, "provenance": {"run_id": "run-baseline", "event_id": "event-3", "evidence_id": null, "rule_id": "RG-EVAL-001", "human_correction_id": null}}
+      ]
+    },
+    "incremental": {
+      "project_id": "project-alpha",
+      "parent": "baseline",
+      "records": [
+        {"memory_id": "memory-container-v1", "kind": "CONSTRAINT", "content": "Containers must run as a non-root user.", "status": "SUPERSEDED", "confidence": 0.95, "supersedes": null, "provenance": {"run_id": "run-baseline", "event_id": "event-1", "evidence_id": "EVID-RG-EVAL-001", "rule_id": "RG-EVAL-001", "human_correction_id": null}},
+        {"memory_id": "memory-container-v2", "kind": "CONSTRAINT", "content": "Containers must run as UID 10001.", "status": "ACTIVE", "confidence": 0.99, "supersedes": "memory-container-v1", "provenance": {"run_id": "run-incremental", "event_id": "event-4", "evidence_id": "EVID-RG-EVAL-001", "rule_id": "RG-EVAL-001", "human_correction_id": null}},
+        {"memory_id": "memory-health", "kind": "PROJECT_FACT", "content": "The service exposes a health endpoint.", "status": "ACTIVE", "confidence": 0.9, "supersedes": null, "provenance": {"run_id": "run-incremental", "event_id": "event-5", "evidence_id": "EVID-RG-EVAL-003", "rule_id": "RG-EVAL-003", "human_correction_id": null}}
+      ]
+    }
+  },
+  "memory_cases": [
+    {"id": "disabled-and-superseded-excluded", "memory": "baseline", "project_id": "project-alpha", "query": "container", "active_run_references": ["run-baseline"], "budget": {"top_k": 3, "max_characters": 500, "max_tokens": 100}, "expected_selected_ids": ["memory-container-v1"], "expected_omissions": {"memory-disabled": "disabled", "memory-superseded": "superseded"}},
+    {"id": "memory-budget-overflow", "memory": "incremental", "project_id": "project-alpha", "query": "container health", "active_run_references": ["run-incremental"], "budget": {"top_k": 1, "max_characters": 500, "max_tokens": 100}, "expected_selected_ids": ["memory-container-v2"], "expected_omissions": {"memory-container-v1": "superseded", "memory-health": "top_k_budget"}}
+  ],
+  "scope_cases": [
+    {"id": "project-scope-isolation", "memory": "baseline", "owner_project_id": "project-alpha", "other_project_id": "project-beta"}
+  ]
+}

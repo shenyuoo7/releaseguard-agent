@@ -36,6 +36,9 @@ from releaseguard_agent.runtime import (
 from releaseguard_agent.runtime.models import AgentRunStatus, RunEvent
 from releaseguard_agent.runtime.store import AgentRunStore, CorruptRunError
 from releaseguard_agent.observability import ExecutionTracer
+from releaseguard_agent.evaluation.relation_rag_memory import (
+    evaluate_relation_rag_memory,
+)
 
 
 _RUNTIME_THRESHOLDS: dict[str, float] = {
@@ -132,6 +135,23 @@ class EvaluationRunner:
     def run(self, dataset_path: Path) -> EvaluationResult:
         normalized = Path(dataset_path).expanduser().resolve()
         payload = json.loads(normalized.read_text(encoding="utf-8"))
+        if not isinstance(payload, Mapping):
+            raise ValueError("Evaluation dataset must be a top-level JSON object.")
+        if payload.get("dataset_type") == "relation_rag_memory":
+            evaluated = evaluate_relation_rag_memory(
+                payload,
+                project_root=self._project_root,
+            )
+            return EvaluationResult(
+                dataset=str(normalized),
+                metrics=evaluated.metrics,
+                details={"relation_rag_memory": evaluated.details},
+                checks_passed=evaluated.passed,
+            )
+        if "dataset_type" in payload:
+            raise ValueError(
+                f"Unsupported evaluation dataset type: {payload['dataset_type']!r}"
+            )
         if "runtime_cases" in payload:
             runtime = self._evaluate_runtime(payload["runtime_cases"])
             return EvaluationResult(

@@ -191,6 +191,26 @@ Run the reproducible offline eval:
 .venv\Scripts\python.exe -m releaseguard_agent.cli.main evaluate
 ```
 
+Run the fixed relation-RAG and project-memory eval:
+
+```powershell
+.venv\Scripts\python.exe -m releaseguard_agent.cli.main evaluate --dataset evals\datasets\relation_rag_memory_cases.json
+```
+
+This second dataset measures lightweight relation expansion derived only from
+the trusted local rule corpus and transparent, local, content-addressed project
+memory. It covers bounded local/graph-hybrid retrieval, verified path and
+citation provenance, incremental changes and tombstones, older-version replay,
+project isolation, explicit graph/memory fallback reasons, lifecycle exclusion,
+and memory context budgets. Graph and memory enrichment are optional and fall
+back or fail closed without fabricating graph paths or memory content.
+
+This implementation intentionally does not provide heavy GraphRAG community
+summaries, global Map-Reduce queries, LLM fact extraction, or external memory
+sync. The fixed offline fixtures and any fake embeddings validate deterministic
+mechanics and provenance only; they do not establish production semantic-search
+quality.
+
 ## Docker demo
 
 Build and run the local demonstration API image:
@@ -272,7 +292,11 @@ retrieval, and hybrid fusion with deduplication and deterministic reranking.
 Vector and hybrid modes require an explicitly configured embedding provider;
 without one they report the degradation and fall back to offline BM25. This is
 retrieval infrastructure, not a claim that semantic quality has been validated
-against a real embedding model. Agent-callable tools and a compiled LangGraph
+against a real embedding model. Verified immutable rule snapshots also support
+bounded lightweight local relation expansion and graph/text fusion. Transparent
+project memory is local, human-readable, versioned, project-scoped, lifecycle-
+aware, and context-budgeted; it never replaces deterministic rule evidence.
+Agent-callable tools and a compiled LangGraph
 conditional workflow are implemented. Evidence, Risk, Fix Planner, and Verifier
 are separate role nodes with typed state transfer; LLM output must cite supplied
 Evidence IDs and cannot override deterministic blocking facts. Execution-level

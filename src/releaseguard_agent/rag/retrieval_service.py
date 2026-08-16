@@ -321,7 +321,13 @@ class RuleRetrievalService:
             if not edge_path:
                 continue
             node = node_by_id[node_id]
-            if node.node_type not in {RelationNodeType.CHUNK, RelationNodeType.SOURCE}:
+            is_two_hop_rule = (
+                node.node_type is RelationNodeType.RULE and len(edge_path) == 2
+            )
+            if node.node_type not in {
+                RelationNodeType.CHUNK,
+                RelationNodeType.SOURCE,
+            } and not is_two_hop_rule:
                 continue
             path = RelationPath(
                 node_ids=node_path,
@@ -339,7 +345,15 @@ class RuleRetrievalService:
                 hop_count=len(edge_path),
                 path_score=1.0 / len(edge_path),
             )
-            for chunk_id in path.source_chunk_ids:
+            path_chunk_ids = path.source_chunk_ids
+            if is_two_hop_rule:
+                path_chunk_ids = tuple(
+                    chunk_id
+                    for chunk_id in path.source_chunk_ids
+                    if self._chunks_by_id.get(chunk_id) is not None
+                    and self._chunks_by_id[chunk_id].rule_id in seed_rule_ids
+                )
+            for chunk_id in path_chunk_ids:
                 if chunk_id in self._chunks_by_id:
                     evidence_paths.setdefault(chunk_id, []).append(path)
         if not evidence_paths:

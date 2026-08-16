@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "dataset_type": "relation_rag_memory",
-  "content_sha256": "f9c4822d297bbe6c5a32532059e6f1589fddc46905adf7689d4634ca551bbeef",
+  "content_sha256": "b7decb1892829bb7c1c0f378d142ec4635cc38e2dcd50a27c9a62b61486b2964",
   "corpora": {
     "baseline": {
       "rule_index": "| rule_id | rule_name | checker | source | support_level | priority | blocking_policy | evidence_type | phase |\n|---|---|---|---|---|---|---|---|---|\n| RG-EVAL-001 | Container user policy | DockerChecker | trusted | source-backed | high | block | file_content | image |\n| RG-EVAL-002 | Pytest command policy | TestChecker | trusted | source-backed | medium | warn | command_result | image |\n",
@@ -27,8 +27,10 @@
       "seed_rule_ids": ["RG-EVAL-001"],
       "budget": {"max_hops": 1, "max_nodes": 12, "max_edges": 12, "max_context_characters": 2000},
       "expected_rule_ids": ["RG-EVAL-001"],
-      "expected_path_node_ids": [["rule:RG-EVAL-001", "chunk:RG-EVAL-001:chunk-01"]],
-      "expected_path_node_type_sequences": [["RULE", "SOURCE"]],
+      "expected_relation_paths": [
+        {"evidence_chunk_id": "RG-EVAL-001:chunk-01", "node_ids": ["rule:RG-EVAL-001", "chunk:RG-EVAL-001:chunk-01"], "edge_ids": ["edge:4f3f053f797d8c429e65d79f"], "source_chunk_ids": ["RG-EVAL-001:chunk-01"], "hop_count": 1},
+        {"evidence_chunk_id": "RG-EVAL-001:chunk-01", "node_ids": ["rule:RG-EVAL-001", "source:0ddb2ffce9444e3cc5627866"], "edge_ids": ["edge:8bb5a74ab768756a5d4654a1"], "source_chunk_ids": ["RG-EVAL-001:chunk-01"], "hop_count": 1}
+      ],
       "expected_citations": [{"rule_id": "RG-EVAL-001", "source_url": "https://example.invalid/releaseguard/eval", "local_source_suffix": "trusted.md", "chunk_id": "RG-EVAL-001:chunk-01"}]
     },
     {
@@ -40,9 +42,11 @@
       "seed_rule_ids": ["RG-EVAL-001"],
       "budget": {"max_hops": 2, "max_nodes": 16, "max_edges": 16, "max_context_characters": 2000},
       "expected_rule_ids": ["RG-EVAL-001"],
-      "expected_path_node_ids": [["rule:RG-EVAL-001", "chunk:RG-EVAL-001:chunk-01"]],
-      "expected_path_node_type_sequences": [["RULE", "SOURCE"]],
-      "expected_traversal_paths": [{"node_ids": ["rule:RG-EVAL-001", "phase:image", "rule:RG-EVAL-002"], "relation_types": ["RULE_APPLIES_TO_PHASE", "RULE_APPLIES_TO_PHASE"], "source_chunk_ids": ["RG-EVAL-001:chunk-01", "RG-EVAL-002:chunk-01"], "hop_count": 2}],
+      "expected_relation_paths": [
+        {"evidence_chunk_id": "RG-EVAL-001:chunk-01", "node_ids": ["rule:RG-EVAL-001", "chunk:RG-EVAL-001:chunk-01"], "edge_ids": ["edge:4f3f053f797d8c429e65d79f"], "source_chunk_ids": ["RG-EVAL-001:chunk-01"], "hop_count": 1},
+        {"evidence_chunk_id": "RG-EVAL-001:chunk-01", "node_ids": ["rule:RG-EVAL-001", "source:0ddb2ffce9444e3cc5627866"], "edge_ids": ["edge:8bb5a74ab768756a5d4654a1"], "source_chunk_ids": ["RG-EVAL-001:chunk-01"], "hop_count": 1},
+        {"evidence_chunk_id": "RG-EVAL-001:chunk-01", "node_ids": ["rule:RG-EVAL-001", "source:0ddb2ffce9444e3cc5627866", "rule:RG-EVAL-002"], "edge_ids": ["edge:8bb5a74ab768756a5d4654a1", "edge:d62637a0530cb7a7adf58489"], "source_chunk_ids": ["RG-EVAL-001:chunk-01", "RG-EVAL-002:chunk-01"], "hop_count": 2}
+      ],
       "expected_citations": [{"rule_id": "RG-EVAL-001", "source_url": "https://example.invalid/releaseguard/eval", "local_source_suffix": "trusted.md", "chunk_id": "RG-EVAL-001:chunk-01"}]
     },
     {
@@ -54,8 +58,11 @@
       "seed_rule_ids": ["RG-EVAL-001"],
       "budget": {"max_hops": 2, "max_nodes": 16, "max_edges": 16, "max_context_characters": 2000},
       "expected_rule_ids": ["RG-EVAL-001"],
-      "expected_path_node_ids": [["rule:RG-EVAL-001", "chunk:RG-EVAL-001:chunk-01"]],
-      "expected_path_node_type_sequences": [["RULE", "SOURCE"]],
+      "expected_relation_paths": [
+        {"evidence_chunk_id": "RG-EVAL-001:chunk-01", "node_ids": ["rule:RG-EVAL-001", "chunk:RG-EVAL-001:chunk-01"], "edge_ids": ["edge:4f3f053f797d8c429e65d79f"], "source_chunk_ids": ["RG-EVAL-001:chunk-01"], "hop_count": 1},
+        {"evidence_chunk_id": "RG-EVAL-001:chunk-01", "node_ids": ["rule:RG-EVAL-001", "source:0ddb2ffce9444e3cc5627866"], "edge_ids": ["edge:8bb5a74ab768756a5d4654a1"], "source_chunk_ids": ["RG-EVAL-001:chunk-01"], "hop_count": 1},
+        {"evidence_chunk_id": "RG-EVAL-001:chunk-01", "node_ids": ["rule:RG-EVAL-001", "source:0ddb2ffce9444e3cc5627866", "rule:RG-EVAL-002"], "edge_ids": ["edge:8bb5a74ab768756a5d4654a1", "edge:d62637a0530cb7a7adf58489"], "source_chunk_ids": ["RG-EVAL-001:chunk-01", "RG-EVAL-002:chunk-01"], "hop_count": 2}
+      ],
       "expected_citations": [{"rule_id": "RG-EVAL-001", "source_url": "https://example.invalid/releaseguard/eval", "local_source_suffix": "trusted.md", "chunk_id": "RG-EVAL-001:chunk-01"}]
     }
   ],

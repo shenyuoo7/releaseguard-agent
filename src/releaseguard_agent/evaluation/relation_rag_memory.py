@@ -7,6 +7,7 @@ import json
 import re
 import shutil
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -75,11 +76,19 @@ def evaluate_relation_rag_memory(
     """Evaluate a verified fixed fixture using only local deterministic services."""
 
     dataset_sha256 = _validate_dataset(payload)
+    fixture_sha256 = hashlib.sha256(
+        _canonical_bytes(
+            {
+                "corpora": payload["corpora"],
+                "memory_versions": payload["memory_versions"],
+            }
+        )
+    ).hexdigest()
     artifact_root = (
         project_root
         / ".runtime"
         / "eval-rm"
-        / dataset_sha256[:16]
+        / fixture_sha256[:16]
     )
     artifact_root.mkdir(parents=True, exist_ok=True)
     execution_root = (
@@ -391,13 +400,7 @@ def _evaluate_relation_cases(
         fixture = _fixture(fixtures, case, "corpus", case_id)
         query = _required_string(case, "query", case_id=case_id)
         expected_rules = _string_tuple(case, "expected_rule_ids", case_id)
-        expected_paths = _path_tuple(case, "expected_path_node_ids", case_id)
-        expected_type_paths = _optional_path_tuple(
-            case,
-            "expected_path_node_type_sequences",
-            case_id,
-        )
-        traversal_expectations = _traversal_expectations(case, case_id)
+        expected_paths = _expected_relation_paths(case, case_id)
         expected_citations = _citation_tuple(case, case_id)
         budget = _relation_budget(case, case_id)
         result = fixture.service.retrieve(
@@ -418,41 +421,26 @@ def _evaluate_relation_cases(
             for evidence in result.evidence
             for path in evidence.relation_paths
         ]
-        node_types = {
-            node.node_id: node.node_type.value for node in fixture.snapshot.nodes
-        }
-        verified_expected_paths = [
-            path
-            for path, chunk_id in returned_paths
-            if _path_is_verified(path, chunk_id, fixture.snapshot)
-            and (
-                path.node_ids in expected_paths
-                or tuple(node_types[node_id] for node_id in path.node_ids)
-                in expected_type_paths
-            )
-        ]
-        exact_coverage = all(
-            any(path.node_ids == expected for path in verified_expected_paths)
-            for expected in expected_paths
+        expected_counts = Counter(
+            _declared_path_identity(item) for item in expected_paths
         )
-        type_coverage = all(
-            any(
-                tuple(node_types[node_id] for node_id in path.node_ids) == expected
-                for path in verified_expected_paths
-            )
-            for expected in expected_type_paths
-        )
-        traversal_results = [
-            _verified_traversal(expectation, fixture.snapshot, budget.max_hops)
-            for expectation in traversal_expectations
-        ]
-        traversal_coverage = all(item is not None for item in traversal_results)
+        matched_counts: Counter[tuple[object, ...]] = Counter()
+        verified_expected_paths = []
+        for path, chunk_id in returned_paths:
+            identity = _returned_path_identity(chunk_id, path)
+            if (
+                _path_is_verified(path, chunk_id, fixture.snapshot)
+                and matched_counts[identity] < expected_counts[identity]
+            ):
+                matched_counts[identity] += 1
+                verified_expected_paths.append(path)
         path_hits = len(verified_expected_paths)
-        path_denominator = len(returned_paths)
-        all_returned_paths_expected = path_hits == path_denominator
+        path_denominator = max(len(returned_paths), len(expected_paths))
         contributions["relation_path_precision"].append(
             (case_id, path_hits, path_denominator)
         )
+        exact_coverage = matched_counts == expected_counts
+        all_returned_paths_expected = path_hits == len(returned_paths)
         citation_hits = sum(
             any(
                 evidence.rule_id == citation["rule_id"]
@@ -474,8 +462,6 @@ def _evaluate_relation_cases(
             and rule_hits == len(expected_rules)
             and all_returned_paths_expected
             and exact_coverage
-            and type_coverage
-            and traversal_coverage
             and citation_hits == len(expected_citations)
         )
         observations.append(
@@ -488,16 +474,8 @@ def _evaluate_relation_cases(
                 "returned_rule_ids": sorted(returned_rules),
                 "returned_path_count": path_denominator,
                 "verified_expected_path_count": path_hits,
-                "verified_traversal_hops": sorted(
-                    item["hop_count"]
-                    for item in traversal_results
-                    if item is not None
-                ),
-                "verified_traversal_edge_ids": sorted(
-                    edge_id
-                    for item in traversal_results
-                    if item is not None
-                    for edge_id in item["edge_ids"]
+                "returned_path_hops": sorted(
+                    path.hop_count for path, _ in returned_paths
                 ),
             }
         )
@@ -902,47 +880,24 @@ def _path_is_verified(path: Any, chunk_id: str, snapshot: RelationSnapshot) -> b
     return True
 
 
-def _verified_traversal(
-    expectation: Mapping[str, Any],
-    snapshot: RelationSnapshot,
-    max_hops: int,
-) -> dict[str, Any] | None:
-    node_ids = tuple(expectation["node_ids"])
-    expected_types = tuple(expectation["relation_types"])
-    expected_chunks = set(expectation["source_chunk_ids"])
-    hop_count = int(expectation["hop_count"])
-    if hop_count != len(node_ids) - 1 or hop_count > max_hops:
-        return None
-    nodes = {node.node_id for node in snapshot.nodes}
-    if not set(node_ids).issubset(nodes):
-        return None
-    edge_ids: list[str] = []
-    relation_types: list[str] = []
-    source_chunks: set[str] = set()
-    for source, target in zip(node_ids[:-1], node_ids[1:], strict=True):
-        matching = sorted(
-            (
-                edge
-                for edge in snapshot.edges
-                if {source, target}
-                == {edge.source_node_id, edge.target_node_id}
-            ),
-            key=lambda edge: edge.edge_id,
-        )
-        if len(matching) != 1:
-            return None
-        edge = matching[0]
-        edge_ids.append(edge.edge_id)
-        relation_types.append(edge.relation_type.value)
-        source_chunks.update(edge.source_chunk_ids)
-    if tuple(relation_types) != expected_types or source_chunks != expected_chunks:
-        return None
-    return {
-        "node_ids": list(node_ids),
-        "edge_ids": edge_ids,
-        "source_chunk_ids": sorted(source_chunks),
-        "hop_count": hop_count,
-    }
+def _returned_path_identity(chunk_id: str, path: Any) -> tuple[object, ...]:
+    return (
+        chunk_id,
+        tuple(path.node_ids),
+        tuple(path.edge_ids),
+        tuple(path.source_chunk_ids),
+        path.hop_count,
+    )
+
+
+def _declared_path_identity(path: Mapping[str, Any]) -> tuple[object, ...]:
+    return (
+        path["evidence_chunk_id"],
+        tuple(path["node_ids"]),
+        tuple(path["edge_ids"]),
+        tuple(path["source_chunk_ids"]),
+        path["hop_count"],
+    )
 
 
 def _case(raw: object, category: str) -> Mapping[str, Any]:
@@ -1038,72 +993,42 @@ def _memory_budget(case: Mapping[str, Any], case_id: str) -> MemoryQueryBudget:
     )
 
 
-def _path_tuple(
-    value: Mapping[str, Any], field: str, case_id: str
-) -> tuple[tuple[str, ...], ...]:
-    candidate = value.get(field)
-    if not isinstance(candidate, list) or not candidate:
-        raise ValueError(f"relation_rag_memory case {case_id!r}: {field} is invalid")
-    paths: list[tuple[str, ...]] = []
-    for item in candidate:
-        if (
-            not isinstance(item, list)
-            or len(item) < 2
-            or any(not isinstance(node_id, str) or not node_id for node_id in item)
-        ):
-            raise ValueError(
-                f"relation_rag_memory case {case_id!r}: {field} is invalid"
-            )
-        paths.append(tuple(item))
-    return tuple(paths)
-
-
-def _optional_path_tuple(
-    value: Mapping[str, Any], field: str, case_id: str
-) -> tuple[tuple[str, ...], ...]:
-    candidate = value.get(field, [])
-    if not isinstance(candidate, list):
-        raise ValueError(f"relation_rag_memory case {case_id!r}: {field} is invalid")
-    paths: list[tuple[str, ...]] = []
-    for item in candidate:
-        if (
-            not isinstance(item, list)
-            or len(item) < 2
-            or any(not isinstance(node_id, str) or not node_id for node_id in item)
-        ):
-            raise ValueError(
-                f"relation_rag_memory case {case_id!r}: {field} is invalid"
-            )
-        paths.append(tuple(item))
-    return tuple(paths)
-
-
-def _traversal_expectations(
+def _expected_relation_paths(
     case: Mapping[str, Any], case_id: str
 ) -> tuple[dict[str, Any], ...]:
-    raw_expectations = case.get("expected_traversal_paths", [])
+    raw_expectations = case.get("expected_relation_paths")
     if not isinstance(raw_expectations, list):
         raise ValueError(
-            f"relation_rag_memory case {case_id!r}: expected_traversal_paths is invalid"
+            f"relation_rag_memory case {case_id!r}: expected_relation_paths is invalid"
+        )
+    if not raw_expectations:
+        raise ValueError(
+            f"relation_rag_memory case {case_id!r}: expected_relation_paths must not be empty"
         )
     parsed: list[dict[str, Any]] = []
     for raw in raw_expectations:
         if not isinstance(raw, Mapping):
             raise ValueError(
-                f"relation_rag_memory case {case_id!r}: expected_traversal_paths is invalid"
+                f"relation_rag_memory case {case_id!r}: expected_relation_paths is invalid"
             )
+        evidence_chunk_id = _required_string(
+            raw,
+            "evidence_chunk_id",
+            case_id=case_id,
+        )
         node_ids = _string_tuple(raw, "node_ids", case_id)
-        relation_types = _string_tuple(raw, "relation_types", case_id)
+        edge_ids = _string_tuple(raw, "edge_ids", case_id)
         source_chunk_ids = _string_tuple(raw, "source_chunk_ids", case_id)
         hop_count = _positive_int(raw, "hop_count", case_id)
-        if len(node_ids) != hop_count + 1 or len(relation_types) != hop_count:
+        if len(node_ids) != hop_count + 1 or len(edge_ids) != hop_count:
             raise ValueError(
-                f"relation_rag_memory case {case_id!r}: traversal shape is invalid"
+                f"relation_rag_memory case {case_id!r}: relation path shape is invalid"
             )
         parsed.append(
             {
+                "evidence_chunk_id": evidence_chunk_id,
                 "node_ids": node_ids,
-                "relation_types": relation_types,
+                "edge_ids": edge_ids,
                 "source_chunk_ids": source_chunk_ids,
                 "hop_count": hop_count,
             }

@@ -113,7 +113,7 @@ def test_dataset_path_components_cannot_escape_fixture_root(tmp_path: Path) -> N
         EvaluationRunner(PROJECT_ROOT).run(_write_dataset(tmp_path, mutate))
 
 
-def test_two_hop_case_proves_a_verified_two_edge_traversal() -> None:
+def test_two_hop_case_requires_a_returned_two_edge_relation_path() -> None:
     result = EvaluationRunner(PROJECT_ROOT).run(DATASET)
     case = next(
         item
@@ -121,7 +121,103 @@ def test_two_hop_case_proves_a_verified_two_edge_traversal() -> None:
         if item["id"] == "local-two-hop-budget"
     )
 
-    assert case["verified_traversal_hops"] == [2]
+    assert 2 in case["returned_path_hops"]
+    assert case["matched"] is True
+
+
+def test_path_precision_rejects_an_extra_valid_unlisted_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = RuleRetrievalService.retrieve
+
+    def duplicate_valid_source_path(self, query, **kwargs):
+        result = original(self, query, **kwargs)
+        if query != "container user" or not result.evidence:
+            return result
+        evidence = result.evidence[0]
+        source_path = next(
+            path
+            for path in evidence.relation_paths
+            if path.node_ids[-1].startswith("source:")
+        )
+        changed = replace(
+            evidence,
+            relation_paths=(*evidence.relation_paths, source_path),
+        )
+        return replace(result, evidence=(changed, *result.evidence[1:]))
+
+    monkeypatch.setattr(
+        RuleRetrievalService,
+        "retrieve",
+        duplicate_valid_source_path,
+    )
+
+    result = EvaluationRunner(PROJECT_ROOT).run(DATASET)
+    detail = result.details["relation_rag_memory"]["metrics"][
+        "relation_path_precision"
+    ]
+
+    assert result.passed is False
+    assert detail["numerator"] < detail["denominator"]
+    assert detail["failed_case_ids"] == ["local-one-hop"]
+
+
+def test_expected_paths_contribute_when_retrieval_returns_zero_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = RuleRetrievalService.retrieve
+
+    def remove_returned_paths(self, query, **kwargs):
+        result = original(self, query, **kwargs)
+        if query != "container user":
+            return result
+        evidence = tuple(
+            replace(item, relation_paths=()) for item in result.evidence
+        )
+        return replace(result, evidence=evidence)
+
+    monkeypatch.setattr(RuleRetrievalService, "retrieve", remove_returned_paths)
+
+    result = EvaluationRunner(PROJECT_ROOT).run(DATASET)
+    detail = result.details["relation_rag_memory"]["metrics"][
+        "relation_path_precision"
+    ]
+
+    assert result.passed is False
+    assert detail["denominator"] > 0
+    assert "local-one-hop" in detail["failed_case_ids"]
+
+
+def test_two_hop_case_fails_when_retrieval_omits_second_hop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = RuleRetrievalService.retrieve
+
+    def remove_two_hop_paths(self, query, **kwargs):
+        result = original(self, query, **kwargs)
+        if query != "pytest command":
+            return result
+        evidence = tuple(
+            replace(
+                item,
+                relation_paths=tuple(
+                    path for path in item.relation_paths if path.hop_count != 2
+                ),
+            )
+            for item in result.evidence
+        )
+        return replace(result, evidence=evidence)
+
+    monkeypatch.setattr(RuleRetrievalService, "retrieve", remove_two_hop_paths)
+
+    result = EvaluationRunner(PROJECT_ROOT).run(DATASET)
+    detail = result.details["relation_rag_memory"]["metrics"][
+        "relation_path_precision"
+    ]
+
+    assert result.passed is False
+    assert detail["numerator"] < detail["denominator"]
+    assert "local-two-hop-budget" in detail["failed_case_ids"]
 
 
 def test_path_precision_counts_fabricated_returned_paths(
@@ -174,8 +270,16 @@ def test_zero_metric_denominator_is_rejected(tmp_path: Path) -> None:
     ("field", "replacement", "metric"),
     (
         (
-            "expected_path_node_ids",
-            [["rule:RG-EVAL-001", "chunk:not-real"]],
+            "expected_relation_paths",
+            [
+                {
+                    "evidence_chunk_id": "RG-EVAL-001:chunk-01",
+                    "node_ids": ["rule:RG-EVAL-001", "chunk:not-real"],
+                    "edge_ids": ["edge:4f3f053f797d8c429e65d79f"],
+                    "source_chunk_ids": ["RG-EVAL-001:chunk-01"],
+                    "hop_count": 1,
+                }
+            ],
             "relation_path_precision",
         ),
         (

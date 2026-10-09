@@ -69,10 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser.add_argument(
         "--output-dir",
         default=None,
-        help=(
-            "Write release_report.md and check_result.json "
-            "to this directory."
-        ),
+        help=("Write release_report.md and check_result.json to this directory."),
     )
     check_parser.add_argument(
         "--checklist-output-dir",
@@ -165,6 +162,22 @@ def build_parser() -> argparse.ArgumentParser:
         default="evals/datasets/golden_cases.json",
     )
     eval_parser.set_defaults(handler=run_evaluation_command)
+
+    agent_parser = subparsers.add_parser(
+        "agent",
+        help="Launch the interactive ReleaseGuard Code Agent terminal interface.",
+    )
+    agent_parser.add_argument(
+        "--config",
+        default=None,
+        help="Optional path to .releaseguard/config.yaml.",
+    )
+    agent_parser.add_argument(
+        "--provider",
+        default=None,
+        help="Optional active provider name to select.",
+    )
+    agent_parser.set_defaults(handler=run_agent_command)
 
     return parser
 
@@ -426,6 +439,28 @@ def _print_error(
         stream = sys.stderr
 
     print(f"Error: {message}", file=stream)
+
+
+def run_agent_command(args: argparse.Namespace) -> int:
+    from releaseguard_agent.config.provider import (
+        ProviderConfigError,
+        get_active_provider,
+        load_providers,
+    )
+    from releaseguard_agent.tui.app import ReleaseGuardApp
+
+    provider = None
+    try:
+        providers = load_providers(args.config)
+        if providers:
+            provider = get_active_provider(providers, args.provider)
+    except ProviderConfigError as exc:
+        _print_error(str(exc))
+        return EXIT_USAGE_ERROR
+
+    app = ReleaseGuardApp(provider=provider)
+    app.run()
+    return EXIT_SUCCESS
 
 
 def main(argv: list[str] | None = None) -> int:

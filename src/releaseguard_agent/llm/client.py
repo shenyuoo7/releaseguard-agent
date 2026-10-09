@@ -203,3 +203,27 @@ class LLMClient(Protocol):
         metadata: Mapping[str, Any] | None = None,
     ) -> LLMResponse:
         """Return one model response for the supplied messages."""
+
+
+class LLMStreamError(Exception):
+    """Raised when streaming from LLM provider fails."""
+
+    pass
+
+
+@runtime_checkable
+class StreamLLMClient(Protocol):
+    """Unified streaming LLM client interface."""
+
+    def stream(
+        self,
+        conversation: Any,
+        system: str = "",
+        tools: list[dict[str, Any]] | None = None,
+    ) -> Any:
+        """Stream model responses chunk by chunk as AsyncIterator[StreamEvent]."""
+        ...
+
+    async def close(self) -> None:
+        """Close underlying client connections."""
+        ...

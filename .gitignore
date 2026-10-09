@@ -21,3 +21,4 @@ outputs/runs/
 !outputs/history/.gitkeep
 !outputs/traces/.gitkeep
 !outputs/logs/.gitkeep
+doct/

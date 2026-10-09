@@ -1,8 +1,9 @@
 """Thread-safe command registry with alias resolution and tab-completion support."""
 
 import threading
+from typing import Any
 
-from releaseguard_agent.commands.models import Command
+from releaseguard_agent.commands.models import Command, CommandType
 
 
 class CommandRegistry:
@@ -83,3 +84,31 @@ class CommandRegistry:
                         candidates.add(f"/{alias}")
 
             return sorted(candidates)
+
+    def register_skills(self, skills: Any) -> None:
+        """Register loaded skills as slash commands, annotated with [skill]."""
+        with self._lock:
+            items = skills.values() if isinstance(skills, dict) else skills
+            for skill in items:
+                cmd_name = skill.name.lower()
+                if cmd_name in self._commands or cmd_name in self._aliases:
+                    continue
+
+                def _bind_handler(target_skill: Any) -> Any:
+                    async def _handler(ctx: Any) -> None:
+                        if ctx.ui:
+                            rendered = target_skill.render_prompt(ctx.args)
+                            ctx.ui.send_user_message(
+                                f"【执行技能: {target_skill.name}】\n{rendered}"
+                            )
+
+                    return _handler
+
+                cmd = Command(
+                    name=cmd_name,
+                    description=f"{skill.description} [skill]",
+                    usage=f"/{cmd_name} [arguments]",
+                    command_type=CommandType.PROMPT,
+                    handler=_bind_handler(skill),
+                )
+                self.register(cmd)

@@ -20,6 +20,7 @@ def assemble_api_payload(
     project_instructions: str | None = None,
     memory_context: str | None = None,
     extra_system_prompt: str = "",
+    available_skills: list[Any] | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble API payload distributing 7 data sources to system, messages, and tools fields.
 
@@ -37,6 +38,33 @@ def assemble_api_payload(
     # 1 & 2. Byte-stable System Prompt
     env_info = get_environment_context(cwd_path)
     system_content = f"{build_static_system_prompt()}\n\n# 运行环境\n{env_info}"
+
+    # Auto-discover available skills for Phase 1 Progressive Disclosure
+    skill_items: list[Any] = []
+    if available_skills is None:
+        try:
+            from releaseguard_agent.skills.loader import SkillLoader
+
+            loaded_skills = SkillLoader(workspace_root=cwd_path).load_all()
+            skill_items = list(loaded_skills.values())
+        except Exception:
+            skill_items = []
+    elif isinstance(available_skills, dict):
+        skill_items = list(available_skills.values())
+    else:
+        skill_items = list(available_skills)
+
+    if skill_items:
+        skill_lines = [
+            "\n\n# 可用技能包 (Available Skills)",
+            "你可以使用 LoadSkill 工具按需激活以下专业技能的标准操作流程 (SOP)：",
+        ]
+        for s in skill_items:
+            s_name = getattr(s, "name", str(s))
+            s_desc = getattr(s, "description", "")
+            skill_lines.append(f"- **{s_name}**: {s_desc}")
+        system_content = f"{system_content}{chr(10).join(skill_lines)}"
+
     if extra_system_prompt.strip():
         system_content = f"{system_content}\n\n{extra_system_prompt.strip()}"
 

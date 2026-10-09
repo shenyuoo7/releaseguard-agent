@@ -33,7 +33,7 @@ class PermissionRule:
 
     def matches(self, tool_name: str, content: str) -> bool:
         """Check whether rule matches the given tool and argument content."""
-        if self.tool_name != "*" and self.tool_name.lower() != tool_name.lower():
+        if self.tool_name != "*" and not fnmatch.fnmatch(tool_name.lower(), self.tool_name.lower()):
             return False
         # Empty pattern matches everything
         if not self.pattern or self.pattern == "*":

@@ -115,11 +115,15 @@ class ReleaseGuardApp(App):
         self,
         provider: ProviderConfig | None = None,
         client: StreamLLMClient | None = None,
+        tool_registry: Any | None = None,
+        mcp_manager: Any | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.provider = provider
         self.client = client
+        self.tool_registry = tool_registry
+        self.mcp_manager = mcp_manager
         self.conversation = ConversationManager()
         self.current_worker: Worker | None = None
         self._init_error: str | None = None

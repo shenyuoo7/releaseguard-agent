@@ -442,11 +442,15 @@ def _print_error(
 
 
 def run_agent_command(args: argparse.Namespace) -> int:
+    import asyncio
+    from pathlib import Path
     from releaseguard_agent.config.provider import (
         ProviderConfigError,
         get_active_provider,
         load_providers,
     )
+    from releaseguard_agent.mcp import MCPManager, ToolSearch, load_mcp_config
+    from releaseguard_agent.tools import build_default_tool_registry
     from releaseguard_agent.tui.app import ReleaseGuardApp
 
     provider = None
@@ -458,8 +462,34 @@ def run_agent_command(args: argparse.Namespace) -> int:
         _print_error(str(exc))
         return EXIT_USAGE_ERROR
 
-    app = ReleaseGuardApp(provider=provider)
-    app.run()
+    registry = build_default_tool_registry()
+    mcp_config = load_mcp_config(Path.cwd())
+    manager = MCPManager(config=mcp_config, workspace_root=Path.cwd())
+
+    # Start MCP servers if configured
+    if mcp_config.servers:
+        try:
+            mcp_tools = asyncio.run(manager.start())
+            for t in mcp_tools:
+                registry.register(t)
+            registry.register(ToolSearch(registry))
+        except Exception as exc:
+            _print_error(f"Failed to initialize MCP servers: {exc}")
+
+    try:
+        app = ReleaseGuardApp(
+            provider=provider,
+            tool_registry=registry,
+            mcp_manager=manager,
+        )
+        app.run()
+    finally:
+        if mcp_config.servers:
+            try:
+                asyncio.run(manager.close())
+            except Exception:
+                pass
+
     return EXIT_SUCCESS
 
 

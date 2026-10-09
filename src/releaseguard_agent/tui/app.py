@@ -22,6 +22,11 @@ from releaseguard_agent.llm.events import (
     ThinkingComplete,
     ThinkingDelta,
 )
+from releaseguard_agent.commands import (
+    CommandContext,
+    CommandRouter,
+    build_default_command_registry,
+)
 from releaseguard_agent.llm.messages import ThinkingBlock
 from releaseguard_agent.llm.openai_stream_client import OpenAIStreamClient
 from releaseguard_agent.tui.banner import render_banner
@@ -34,6 +39,22 @@ class ReleaseGuardApp(App):
     Screen {
         layout: vertical;
         background: $background;
+    }
+
+    .system-msg {
+        background: $surface-lighten-1;
+        color: $text;
+        padding: 1;
+        margin: 1 0;
+        border-left: solid $accent;
+    }
+
+    .command-box {
+        background: $surface-darken-2;
+        color: $accent;
+        padding: 1;
+        margin: 1 0;
+        border-left: solid $primary;
     }
 
     #banner-view {
@@ -109,6 +130,7 @@ class ReleaseGuardApp(App):
         Binding("escape", "cancel_generation", "Cancel / Esc"),
         Binding("ctrl+c", "quit", "Quit"),
         Binding("ctrl+l", "clear_chat", "Clear Screen"),
+        Binding("tab", "autocomplete_command", "Autocomplete", show=False),
     ]
 
     def __init__(
@@ -125,6 +147,9 @@ class ReleaseGuardApp(App):
         self.tool_registry = tool_registry
         self.mcp_manager = mcp_manager
         self.conversation = ConversationManager()
+        self.command_registry = build_default_command_registry()
+        self.command_router = CommandRouter(self.command_registry)
+        self.plan_mode: bool = False
         self.current_worker: Worker | None = None
         self._init_error: str | None = None
 
@@ -197,6 +222,28 @@ class ReleaseGuardApp(App):
             return
 
         input_widget.value = ""
+
+        # Check Slash Command Interception
+        if self.command_router.is_command(text):
+            chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
+            cmd_box = Static(f"💻 Command: {text}", classes="command-box")
+            await chat_scroll.mount(cmd_box)
+            chat_scroll.scroll_end(animate=False)
+
+            from pathlib import Path
+
+            ctx = CommandContext(
+                args="",
+                agent=self,
+                conversation=self.conversation,
+                ui=self,
+                workspace_root=Path.cwd(),
+            )
+            await self.command_router.handle_input_async(text, ctx)
+            input_widget.disabled = False
+            input_widget.focus()
+            return
+
         input_widget.disabled = True
 
         chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
@@ -311,6 +358,72 @@ class ReleaseGuardApp(App):
         chat_scroll.remove_children()
         self.conversation.clear()
         self.update_status(state="Cleared")
+
+    def add_system_message(self, text: str) -> None:
+        """Display an informational system box in chat view."""
+        chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
+        box = Static(f"ℹ️ {text}", classes="system-msg")
+        asyncio.create_task(chat_scroll.mount(box))
+        chat_scroll.scroll_end(animate=False)
+
+    def send_user_message(self, text: str) -> None:
+        """Inject a synthetic user message into the conversation and trigger generation."""
+        asyncio.create_task(self._process_synthetic_user_message(text))
+
+    async def _process_synthetic_user_message(self, text: str) -> None:
+        chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
+        user_box = Static(f"🧑 User (Command):\n{text}", classes="user-msg")
+        await chat_scroll.mount(user_box)
+        chat_scroll.scroll_end(animate=False)
+        self.conversation.add_user_message(text)
+        self.update_status(state="Generating...")
+        if self.client:
+            self.current_worker = self.run_worker(
+                self._stream_response(),
+                exclusive=True,
+                name="llm_stream",
+            )
+
+    def set_plan_mode(self, enabled: bool) -> None:
+        """Toggle plan mode on status bar."""
+        self.plan_mode = enabled
+        self.update_status(state="Plan Mode" if enabled else "Ready")
+
+    def get_token_count(self) -> int:
+        """Estimate active conversation token count."""
+        try:
+            from releaseguard_agent.runtime.context.token_counter import (
+                estimate_context_tokens,
+            )
+
+            return estimate_context_tokens(self.conversation.get_messages())
+        except Exception:
+            return self.conversation.estimate_tokens()
+
+    def refresh_status(self) -> None:
+        """Force status bar refresh."""
+        self.update_status()
+
+    def clear_chat(self) -> None:
+        """Clear visible chat history via UIController."""
+        self.action_clear_chat()
+
+    async def action_autocomplete_command(self) -> None:
+        """Handle Tab key for slash command autocompletion."""
+        input_widget = self.query_one("#user-input", Input)
+        val = input_widget.value.strip()
+        if val.startswith("/"):
+            candidates = self.command_registry.complete(val)
+            if len(candidates) == 1:
+                input_widget.value = candidates[0] + " "
+                input_widget.cursor_position = len(input_widget.value)
+            elif len(candidates) > 1:
+                chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
+                msg = Static(
+                    "💡 候选命令: " + "  ".join(candidates), classes="system-msg"
+                )
+                await chat_scroll.mount(msg)
+                chat_scroll.scroll_end(animate=False)
 
     async def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         if event.state in (

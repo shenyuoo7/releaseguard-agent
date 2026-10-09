@@ -1,7 +1,8 @@
 import asyncio
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from enum import Enum
+from typing import Any
 
 from releaseguard_agent.llm.client import StreamLLMClient
 from releaseguard_agent.llm.conversation import ConversationManager
@@ -19,6 +20,11 @@ from releaseguard_agent.llm.messages import (
 )
 from releaseguard_agent.prompts import assemble_api_payload, format_system_reminder
 from releaseguard_agent.runtime.batcher import ToolCallItem, partition_tool_calls
+from releaseguard_agent.security import (
+    Decision,
+    PermissionEngine,
+    append_local_allow_rule,
+)
 from releaseguard_agent.runtime.events import (
     AgentErrorEvent,
     AgentEvent,
@@ -56,10 +62,12 @@ class ReactAgentEngine:
         client: StreamLLMClient,
         registry: ToolRegistry,
         max_turns: int = 50,
+        permission_engine: PermissionEngine | None = None,
     ) -> None:
         self.client = client
         self.registry = registry
         self.max_turns = max_turns
+        self.permission_engine = permission_engine
         self.state = LoopState.INITIAL
 
     async def run(
@@ -70,10 +78,13 @@ class ReactAgentEngine:
         plan_mode: bool = False,
         context: ToolContext | None = None,
         system_reminders: list[str] | None = None,
+        permission_engine: PermissionEngine | None = None,
+        hitl_handler: Callable[[str, dict[str, Any]], Awaitable[str]] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         turn = 0
         consecutive_unknown_tools = 0
         effective_context = context or ToolContext()
+        active_perm_engine = permission_engine or self.permission_engine
 
         available_tools = (
             [t for t in self.registry.list_tools() if t.is_read_only]
@@ -222,6 +233,50 @@ class ReactAgentEngine:
             batches = partition_tool_calls(tool_calls, tool_lookup)
             tool_results_list: list[ToolResultBlock] = []
 
+            async def _execute_with_permission(
+                item: ToolCallItem,
+            ) -> ToolResult:
+                tool_inst = tool_lookup.get(item.name)
+                is_ro = tool_inst.is_read_only if tool_inst else False
+
+                if active_perm_engine:
+                    decision = active_perm_engine.check(
+                        tool_name=item.name,
+                        arguments=item.arguments,
+                        is_read_only=is_ro,
+                    )
+                    if decision == Decision.DENY:
+                        return ToolResult(
+                            content=f"Permission denied: execution of '{item.name}' was rejected by security policy.",
+                            is_error=True,
+                        )
+                    if decision == Decision.ASK:
+                        if hitl_handler:
+                            choice = await hitl_handler(item.name, item.arguments)
+                            if choice == "a":
+                                pattern = str(
+                                    item.arguments.get("command")
+                                    or item.arguments.get("path")
+                                    or "*"
+                                )
+                                append_local_allow_rule(
+                                    effective_context.cwd, item.name, pattern
+                                )
+                            elif choice != "y":
+                                return ToolResult(
+                                    content=f"Permission denied: user rejected execution of '{item.name}'.",
+                                    is_error=True,
+                                )
+                        else:
+                            return ToolResult(
+                                content=f"Permission denied: execution of '{item.name}' requires confirmation, but no interactive HITL handler was configured.",
+                                is_error=True,
+                            )
+
+                return await self.registry.execute(
+                    item.name, item.arguments, effective_context
+                )
+
             for batch in batches:
                 if cancel_token and cancel_token.is_set():
                     self.state = LoopState.ABORTED
@@ -234,9 +289,7 @@ class ReactAgentEngine:
                         item: ToolCallItem,
                     ) -> tuple[ToolCallItem, ToolResult, float]:
                         t0 = time.perf_counter()
-                        res = await self.registry.execute(
-                            item.name, item.arguments, effective_context
-                        )
+                        res = await _execute_with_permission(item)
                         dur_ms = (time.perf_counter() - t0) * 1000
                         return item, res, dur_ms
 
@@ -255,9 +308,7 @@ class ReactAgentEngine:
                     # Serial execution of mutating tools
                     for item in batch.calls:
                         t0 = time.perf_counter()
-                        res = await self.registry.execute(
-                            item.name, item.arguments, effective_context
-                        )
+                        res = await _execute_with_permission(item)
                         dur_ms = (time.perf_counter() - t0) * 1000
                         yield AgentToolResultEvent(
                             tool_id=item.id,

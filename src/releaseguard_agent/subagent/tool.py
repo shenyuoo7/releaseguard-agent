@@ -14,6 +14,9 @@ from releaseguard_agent.subagent.runner import FORK_BOILERPLATE, run_to_completi
 from releaseguard_agent.subagent.task_manager import TaskManager
 from releaseguard_agent.tools.base import BaseTool, ToolContext, ToolResult
 from releaseguard_agent.tools.registry import ToolRegistry
+from releaseguard_agent.worktree.cleaner import has_worktree_changes
+from releaseguard_agent.worktree.manager import WorktreeManager
+from releaseguard_agent.worktree.models import WorktreeSession
 
 
 class AgentTool(BaseTool):
@@ -104,13 +107,34 @@ class AgentTool(BaseTool):
 
         task_id = f"agent-{uuid.uuid4().hex[:8]}"
         task_name = custom_name or description or subagent_type or "SubAgent Task"
+        isolation = str(arguments.get("isolation", "")).strip().lower()
 
         effective_context = context or ToolContext(cwd=self.workspace_root)
 
-        # 1. Determine subagent mode: Definition-based vs Fork-based
+        # 1. Physical isolation via Git Worktree if requested
+        wt_mgr: WorktreeManager | None = None
+        wt_session: WorktreeSession | None = None
+        if isolation == "worktree":
+            try:
+                wt_mgr = WorktreeManager(self.workspace_root)
+                slug = f"agent-a{uuid.uuid4().hex[:7]}"
+                wt_session = wt_mgr.enter_session(slug)
+                effective_context = ToolContext(
+                    cwd=wt_session.worktree_path,
+                    extra=dict(effective_context.extra),
+                )
+            except Exception as wt_err:
+                return ToolResult(
+                    content=f"Failed to initialize isolated worktree: {wt_err}",
+                    is_error=True,
+                )
+
+        # 2. Determine subagent mode: Definition-based vs Fork-based
         if subagent_type:
             agent_def = self.agent_loader.load_agent(subagent_type)
             if not agent_def:
+                if wt_session and wt_mgr:
+                    wt_mgr.exit_session(wt_session, discard_changes=True)
                 return ToolResult(
                     content=f"未找到类型为 '{subagent_type}' 的专家定义。可用类型包括: Explore, Plan, Verification, general-purpose。",
                     is_error=True,
@@ -142,6 +166,13 @@ class AgentTool(BaseTool):
                 is_async=True,
             )
 
+        if wt_session:
+            system_prompt = (
+                f"{system_prompt}\n\n"
+                f"【Worktree Notice】You are operating in an isolated git worktree at: {wt_session.worktree_path}.\n"
+                f"Branch: {wt_session.worktree_branch}. All file operations are isolated from the main branch."
+            )
+
         # Subagent ReAct Engine
         sub_engine = ReactAgentEngine(
             client=self.llm_client,
@@ -151,15 +182,34 @@ class AgentTool(BaseTool):
 
         # Subagent execution coroutine
         async def _run() -> str:
-            return await run_to_completion(
-                engine=sub_engine,
-                conversation=sub_conv,
-                task_prompt=prompt,
-                system_prompt=system_prompt,
-                context=effective_context,
-            )
+            try:
+                out = await run_to_completion(
+                    engine=sub_engine,
+                    conversation=sub_conv,
+                    task_prompt=prompt,
+                    system_prompt=system_prompt,
+                    context=effective_context,
+                )
+                if wt_session and wt_mgr:
+                    if has_worktree_changes(
+                        wt_session.worktree_path, wt_session.original_head_commit
+                    ):
+                        out = (
+                            f"{out}\n\n[Worktree Saved] Changes preserved in branch "
+                            f"'{wt_session.worktree_branch}' at {wt_session.worktree_path}."
+                        )
+                    else:
+                        wt_mgr.exit_session(wt_session, discard_changes=True)
+                return out
+            except Exception as run_err:
+                if wt_session and wt_mgr:
+                    if not has_worktree_changes(
+                        wt_session.worktree_path, wt_session.original_head_commit
+                    ):
+                        wt_mgr.exit_session(wt_session, discard_changes=True)
+                raise run_err
 
-        # 2. Asynchronous background execution
+        # 3. Asynchronous background execution
         if run_in_background:
             self.task_manager.launch(
                 task_id=task_id,
@@ -171,7 +221,7 @@ class AgentTool(BaseTool):
                 metadata={"task_id": task_id, "async": True},
             )
 
-        # 3. Synchronous foreground execution with 120s timeout handover
+        # 4. Synchronous foreground execution with 120s timeout handover
         coro_task = asyncio.create_task(_run())
         try:
             result = await asyncio.wait_for(coro_task, timeout=120.0)

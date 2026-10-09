@@ -42,20 +42,30 @@ def assemble_api_payload(
 
     # 4 & 5. Auto-discover project instructions and memory if not explicitly provided
     if project_instructions is None:
-        inst_file = cwd_path / "RELEASEGUARD.md"
-        if inst_file.is_file():
-            try:
-                project_instructions = inst_file.read_text(encoding="utf-8")
-            except Exception:
-                project_instructions = None
+        try:
+            from releaseguard_agent.memory.instructions import load_project_instructions
+
+            project_instructions = load_project_instructions(workspace_root=cwd_path)
+        except Exception:
+            inst_file = cwd_path / "RELEASEGUARD.md"
+            if inst_file.is_file():
+                try:
+                    project_instructions = inst_file.read_text(encoding="utf-8")
+                except Exception:
+                    project_instructions = None
 
     if memory_context is None:
-        mem_file = cwd_path / "MEMORY.md"
-        if mem_file.is_file():
-            try:
-                memory_context = mem_file.read_text(encoding="utf-8")
-            except Exception:
-                memory_context = None
+        try:
+            from releaseguard_agent.memory.auto_memory import MemoryManager
+
+            memory_context = MemoryManager(workspace_root=cwd_path).load_memory_index()
+        except Exception:
+            mem_file = cwd_path / "MEMORY.md"
+            if mem_file.is_file():
+                try:
+                    memory_context = mem_file.read_text(encoding="utf-8")
+                except Exception:
+                    memory_context = None
 
     # Construct messages list
     messages: list[dict[str, Any]] = []

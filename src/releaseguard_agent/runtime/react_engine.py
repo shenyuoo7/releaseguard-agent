@@ -4,6 +4,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from enum import Enum
 from typing import Any
 
+from releaseguard_agent.hooks.engine import HookEngine
+from releaseguard_agent.hooks.models import HookContext, ToolRejectedError
 from releaseguard_agent.llm.client import StreamLLMClient
 from releaseguard_agent.llm.conversation import ConversationManager
 from releaseguard_agent.llm.events import (
@@ -71,12 +73,14 @@ class ReactAgentEngine:
         max_turns: int = 50,
         permission_engine: PermissionEngine | None = None,
         window_tokens: int = 200_000,
+        hook_engine: HookEngine | None = None,
     ) -> None:
         self.client = client
         self.registry = registry
         self.max_turns = max_turns
         self.permission_engine = permission_engine
         self.window_tokens = window_tokens
+        self.hook_engine = hook_engine
         self.replacement_state = ContentReplacementState()
         self.compact_failures = 0
         self.state = LoopState.INITIAL
@@ -91,11 +95,22 @@ class ReactAgentEngine:
         system_reminders: list[str] | None = None,
         permission_engine: PermissionEngine | None = None,
         hitl_handler: Callable[[str, dict[str, Any]], Awaitable[str]] | None = None,
+        hook_engine: HookEngine | None = None,
     ) -> AsyncIterator[AgentEvent]:
         turn = 0
         consecutive_unknown_tools = 0
         effective_context = context or ToolContext()
         active_perm_engine = permission_engine or self.permission_engine
+        active_hook_engine = hook_engine or self.hook_engine
+
+        if active_hook_engine:
+            await active_hook_engine.emit(
+                "session_start",
+                HookContext(
+                    event_name="session_start",
+                    workspace_root=str(effective_context.cwd),
+                ),
+            )
 
         available_tools = (
             [t for t in self.registry.list_tools() if t.is_read_only]
@@ -135,6 +150,15 @@ class ReactAgentEngine:
 
             turn += 1
             self.state = LoopState.STREAMING
+            if active_hook_engine:
+                await active_hook_engine.emit(
+                    "turn_start",
+                    HookContext(
+                        event_name="turn_start",
+                        workspace_root=str(effective_context.cwd),
+                        message=f"Turn {turn}",
+                    ),
+                )
 
             # Context management: Check token limit for Layer 2 Auto-Compact
             compact_threshold = compute_compact_threshold(self.window_tokens)
@@ -171,6 +195,15 @@ class ReactAgentEngine:
                     stream_conv.add_user_message(
                         format_system_reminder("\n".join(clean_reminders))
                     )
+
+            if active_hook_engine:
+                await active_hook_engine.emit(
+                    "pre_send",
+                    HookContext(
+                        event_name="pre_send",
+                        workspace_root=str(effective_context.cwd),
+                    ),
+                )
 
             # 3. Stream model generation
             try:
@@ -237,6 +270,16 @@ class ReactAgentEngine:
                 yield AgentErrorEvent(error="Agent loop was cancelled by user.")
                 return
 
+            if active_hook_engine:
+                await active_hook_engine.emit(
+                    "post_receive",
+                    HookContext(
+                        event_name="post_receive",
+                        workspace_root=str(effective_context.cwd),
+                        message=accumulated_text,
+                    ),
+                )
+
             # 4. Construct Assistant message and update conversation
             thinking_blocks = (
                 [ThinkingBlock(thinking=accumulated_thinking)]
@@ -260,6 +303,23 @@ class ReactAgentEngine:
             # 5. Terminal check: if no tool calls were generated, model has finished its answer
             if not tool_calls:
                 self.state = LoopState.TERMINAL
+                if active_hook_engine:
+                    await active_hook_engine.emit(
+                        "turn_end",
+                        HookContext(
+                            event_name="turn_end",
+                            workspace_root=str(effective_context.cwd),
+                            message=f"Turn {turn} completed",
+                        ),
+                    )
+                    await active_hook_engine.emit(
+                        "session_end",
+                        HookContext(
+                            event_name="session_end",
+                            workspace_root=str(effective_context.cwd),
+                            message="Loop completed",
+                        ),
+                    )
                 yield AgentTurnCompleteEvent(turn=turn)
                 yield AgentLoopCompleteEvent(
                     total_turns=turn, final_content=accumulated_text
@@ -289,6 +349,22 @@ class ReactAgentEngine:
             ) -> ToolResult:
                 tool_inst = tool_lookup.get(item.name)
                 is_ro = tool_inst.is_read_only if tool_inst else False
+
+                if active_hook_engine:
+                    try:
+                        await active_hook_engine.run_pre_tool_hooks(
+                            HookContext(
+                                event_name="pre_tool_use",
+                                workspace_root=str(effective_context.cwd),
+                                tool_name=item.name,
+                                tool_args=item.arguments,
+                            )
+                        )
+                    except ToolRejectedError as e:
+                        return ToolResult(
+                            content=str(e),
+                            is_error=True,
+                        )
 
                 if active_perm_engine:
                     decision = active_perm_engine.check(
@@ -324,9 +400,24 @@ class ReactAgentEngine:
                                 is_error=True,
                             )
 
-                return await self.registry.execute(
+                res = await self.registry.execute(
                     item.name, item.arguments, effective_context
                 )
+
+                if active_hook_engine:
+                    await active_hook_engine.emit(
+                        "post_tool_use",
+                        HookContext(
+                            event_name="post_tool_use",
+                            workspace_root=str(effective_context.cwd),
+                            tool_name=item.name,
+                            tool_args=item.arguments,
+                            message=res.content if not res.is_error else "",
+                            error=res.content if res.is_error else "",
+                        ),
+                    )
+
+                return res
 
             for batch in batches:
                 if cancel_token and cancel_token.is_set():
@@ -370,7 +461,9 @@ class ReactAgentEngine:
                         tool_results_list.append(res.to_tool_result_block(item.id))
 
             # 8. Apply tool result budget and freeze decisions
-            storage_dir = effective_context.cwd / ".runtime" / "session" / "tool-results"
+            storage_dir = (
+                effective_context.cwd / ".runtime" / "session" / "tool-results"
+            )
             apply_tool_result_budget(
                 tool_results=tool_results_list,
                 state=self.replacement_state,
@@ -385,5 +478,15 @@ class ReactAgentEngine:
                     tool_results=tool_results_list,
                 )
             )
+
+            if active_hook_engine:
+                await active_hook_engine.emit(
+                    "turn_end",
+                    HookContext(
+                        event_name="turn_end",
+                        workspace_root=str(effective_context.cwd),
+                        message=f"Turn {turn} completed",
+                    ),
+                )
 
             yield AgentTurnCompleteEvent(turn=turn)

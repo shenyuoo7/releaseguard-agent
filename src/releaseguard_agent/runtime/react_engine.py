@@ -20,6 +20,13 @@ from releaseguard_agent.llm.messages import (
 )
 from releaseguard_agent.prompts import assemble_api_payload, format_system_reminder
 from releaseguard_agent.runtime.batcher import ToolCallItem, partition_tool_calls
+from releaseguard_agent.runtime.context import (
+    ContentReplacementState,
+    apply_tool_result_budget,
+    compute_compact_threshold,
+    estimate_context_tokens,
+    perform_auto_compact,
+)
 from releaseguard_agent.security import (
     Decision,
     PermissionEngine,
@@ -63,11 +70,15 @@ class ReactAgentEngine:
         registry: ToolRegistry,
         max_turns: int = 50,
         permission_engine: PermissionEngine | None = None,
+        window_tokens: int = 200_000,
     ) -> None:
         self.client = client
         self.registry = registry
         self.max_turns = max_turns
         self.permission_engine = permission_engine
+        self.window_tokens = window_tokens
+        self.replacement_state = ContentReplacementState()
+        self.compact_failures = 0
         self.state = LoopState.INITIAL
 
     async def run(
@@ -125,6 +136,28 @@ class ReactAgentEngine:
             turn += 1
             self.state = LoopState.STREAMING
 
+            # Context management: Check token limit for Layer 2 Auto-Compact
+            compact_threshold = compute_compact_threshold(self.window_tokens)
+            current_tokens = estimate_context_tokens(
+                conversation.get_messages(), effective_system
+            )
+            if current_tokens >= compact_threshold:
+                compact_ok = await perform_auto_compact(
+                    conversation=conversation,
+                    client=self.client,
+                    window_tokens=self.window_tokens,
+                )
+                if compact_ok:
+                    self.compact_failures = 0
+                else:
+                    self.compact_failures += 1
+                    if self.compact_failures >= 3:
+                        self.state = LoopState.ABORTED
+                        yield AgentErrorEvent(
+                            error="Circuit breaker triggered: 3 consecutive Auto-Compact failures. Aborting loop."
+                        )
+                        return
+
             accumulated_text = ""
             accumulated_thinking = ""
             tool_calls: list[ToolCallItem] = []
@@ -178,6 +211,24 @@ class ReactAgentEngine:
             except asyncio.CancelledError:
                 self.state = LoopState.ABORTED
                 yield AgentErrorEvent(error="Stream was cancelled.")
+                return
+            except Exception as stream_err:
+                err_text = str(stream_err).lower()
+                if (
+                    "prompt_too_long" in err_text
+                    or "context_length_exceeded" in err_text
+                    or "too long" in err_text
+                ):
+                    recovered = await perform_auto_compact(
+                        conversation=conversation,
+                        client=self.client,
+                        window_tokens=self.window_tokens,
+                        keep_recent_messages=2,
+                    )
+                    if recovered:
+                        continue
+                self.state = LoopState.ABORTED
+                yield AgentErrorEvent(error=f"LLM streaming error: {stream_err}")
                 return
 
             # Post-stream cancellation check
@@ -318,7 +369,15 @@ class ReactAgentEngine:
                         )
                         tool_results_list.append(res.to_tool_result_block(item.id))
 
-            # 8. Append tool results to conversation as user observation message
+            # 8. Apply tool result budget and freeze decisions
+            storage_dir = effective_context.cwd / ".runtime" / "session" / "tool-results"
+            apply_tool_result_budget(
+                tool_results=tool_results_list,
+                state=self.replacement_state,
+                storage_dir=storage_dir,
+            )
+
+            # Append tool results to conversation as user observation message
             conversation.append(
                 Message(
                     role="user",

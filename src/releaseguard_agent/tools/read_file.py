@@ -15,7 +15,8 @@ class ReadFileTool(BaseTool):
     def description(self) -> str:
         return (
             "Read content from a file with line numbers. Supports offset and limit "
-            "for pagination. Automatically guards against reading binary files."
+            "for pagination. Automatically guards against reading binary files. "
+            "Always inspect files with read_file before attempting any edits with edit_file."
         )
 
     @property

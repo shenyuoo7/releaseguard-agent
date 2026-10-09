@@ -15,7 +15,8 @@ class BashTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Execute a shell command within the workspace directory. "
+            "Execute a shell command within the workspace directory. Prefer dedicated tools "
+            "(read_file, edit_file, write_file, glob, grep) over bash where possible. "
             "Includes automatic timeout enforcement (default: 30s) and tail-biased output truncation."
         )
 

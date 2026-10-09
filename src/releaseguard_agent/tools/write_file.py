@@ -15,7 +15,8 @@ class WriteFileTool(BaseTool):
     def description(self) -> str:
         return (
             "Write full text content to a file. Overwrites existing files or creates new ones. "
-            "Automatically creates any missing parent directories."
+            "Automatically creates any missing parent directories. Prefer edit_file for targeted "
+            "modifications of existing files; use write_file when creating new files or fully replacing files."
         )
 
     @property

@@ -17,6 +17,7 @@ from releaseguard_agent.llm.messages import (
     ToolResultBlock,
     ToolUseBlock,
 )
+from releaseguard_agent.prompts import assemble_api_payload, format_system_reminder
 from releaseguard_agent.runtime.batcher import ToolCallItem, partition_tool_calls
 from releaseguard_agent.runtime.events import (
     AgentErrorEvent,
@@ -68,33 +69,32 @@ class ReactAgentEngine:
         cancel_token: asyncio.Event | None = None,
         plan_mode: bool = False,
         context: ToolContext | None = None,
+        system_reminders: list[str] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         turn = 0
         consecutive_unknown_tools = 0
         effective_context = context or ToolContext()
 
-        # Build effective system prompt and exposed tool schemas
-        effective_system = system_prompt.strip()
+        available_tools = (
+            [t for t in self.registry.list_tools() if t.is_read_only]
+            if plan_mode
+            else self.registry.list_tools()
+        )
+        tool_lookup = {t.name: t for t in available_tools}
+
+        payload = assemble_api_payload(
+            conversation_history=conversation,
+            enabled_tools=available_tools,
+            effective_cwd=effective_context.cwd,
+            system_reminders=system_reminders,
+            extra_system_prompt=system_prompt,
+        )
+
+        effective_system = payload["system"]
         if plan_mode:
-            effective_system = (
-                f"{effective_system}\n\n{PLAN_MODE_PROMPT}"
-                if effective_system
-                else PLAN_MODE_PROMPT
-            )
-            # Only expose read-only tools in plan mode
-            available_tools = [t for t in self.registry.list_tools() if t.is_read_only]
-            tool_definitions = [
-                {
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": t.parameters_schema,
-                }
-                for t in available_tools
-            ]
-            tool_lookup = {t.name: t for t in available_tools}
-        else:
-            tool_definitions = self.registry.definitions()
-            tool_lookup = {t.name: t for t in self.registry.list_tools()}
+            effective_system = f"{effective_system}\n\n{PLAN_MODE_PROMPT}"
+
+        tool_definitions = payload["tools"]
 
         while True:
             # 1. Turn limit check
@@ -118,10 +118,20 @@ class ReactAgentEngine:
             accumulated_thinking = ""
             tool_calls: list[ToolCallItem] = []
 
+            # Prepare conversation with dynamic reminder if needed
+            stream_conv = conversation
+            if system_reminders:
+                stream_conv = conversation.clone()
+                clean_reminders = [r.strip() for r in system_reminders if r.strip()]
+                if clean_reminders:
+                    stream_conv.add_user_message(
+                        format_system_reminder("\n".join(clean_reminders))
+                    )
+
             # 3. Stream model generation
             try:
                 async for event in self.client.stream(
-                    conversation=conversation,
+                    conversation=stream_conv,
                     system=effective_system,
                     tools=tool_definitions,
                 ):

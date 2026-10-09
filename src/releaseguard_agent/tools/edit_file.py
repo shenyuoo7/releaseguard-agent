@@ -14,9 +14,9 @@ class EditFileTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Replace exact text in a file. The target 'old_string' must occur exactly once "
-            "in the file to prevent ambiguous edits. If it occurs 0 or multiple times, "
-            "the operation is rejected and an informative error is returned."
+            "Replace exact text in a file. Must only be used after reading the target file "
+            "with read_file to confirm latest contents. The target 'old_string' must occur "
+            "exactly once in the file to prevent ambiguous edits. Do not use bash for text edits."
         )
 
     @property

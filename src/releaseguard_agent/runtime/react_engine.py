@@ -100,6 +100,7 @@ class ReactAgentEngine:
         turn = 0
         consecutive_unknown_tools = 0
         effective_context = context or ToolContext()
+        effective_context.extra["conversation"] = conversation
         active_perm_engine = permission_engine or self.permission_engine
         active_hook_engine = hook_engine or self.hook_engine
 
